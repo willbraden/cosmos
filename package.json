@@ -1,0 +1,84 @@
+{
+  "name": "cosmos",
+  "version": "0.1.0",
+  "description": "Cosmos \u2014 a desktop app for the pi coding agent",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e-rpc.mjs",
+    "dist": "electron-vite build && electron-builder --mac"
+  },
+  "author": "Will Braden",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "electron-log": "^5.4.4",
+    "highlight.js": "^11.12.0",
+    "lucide-react": "^1.48.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "5.9",
+    "vite": "^7.3.6",
+    "vitest": "^5.0.1"
+  },
+  "productName": "Cosmos",
+  "build": {
+    "appId": "com.willbraden.cosmos",
+    "productName": "Cosmos",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/pi-launcher.mjs",
+        "to": "pi-launcher.mjs"
+      },
+      {
+        "from": "resources/pi-extension",
+        "to": "pi-extension"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "asar": false,
+    "copyright": "Copyright \u00a9 2026 Will Braden"
+  }
+}

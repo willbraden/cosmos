@@ -1,0 +1,9 @@
+{
+	"extends": "./tsconfig.web.json",
+	"compilerOptions": {
+		"types": ["node"],
+		"resolveJsonModule": true,
+		"composite": false
+	},
+	"include": ["test/**/*", "src/**/*", "resources/pi-extension/**/*"]
+}
