@@ -4,6 +4,7 @@ import { getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import { shell } from "electron";
 import log from "electron-log/main";
 import type { SessionSummary } from "../shared/ipc";
+import { compareSessionSummaries } from "../shared/session-order";
 
 type SessionInfo = Awaited<ReturnType<typeof SessionManager.listAll>>[number];
 
@@ -32,21 +33,37 @@ export class SessionIndex {
 		const root = sessionsRoot();
 		try {
 			mkdirSync(root, { recursive: true });
-			this.watcher = watch(root, { recursive: true }, () => this.scheduleRefresh());
-			this.watcher.on("error", (error) => log.warn("Session folder watcher failed", error));
+			this.watcher = watch(root, { recursive: true }, () =>
+				this.scheduleRefresh(),
+			);
+			this.watcher.on("error", (error) =>
+				log.warn("Session folder watcher failed", error),
+			);
 		} catch (error) {
-			log.warn(`Cannot watch ${root}; the sidebar refreshes only on demand`, error);
+			log.warn(
+				`Cannot watch ${root}; the sidebar refreshes only on demand`,
+				error,
+			);
 		}
 	}
 
 	stop(): void {
 		this.watcher?.close();
+		this.watcher = null;
 		if (this.debounce) clearTimeout(this.debounce);
+		this.debounce = null;
+	}
+
+	restart(): void {
+		this.stop();
+		this.dirty = true;
+		this.start();
+		void this.ensureLoaded().then(() => this.onChanged());
 	}
 
 	async list(): Promise<SessionSummary[]> {
 		await this.ensureLoaded();
-		return this.sessions.map(toSummary);
+		return this.sessions.map(toSummary).sort(compareSessionSummaries);
 	}
 
 	/** Full-text search over names and message text. Returns matching session paths. */
@@ -56,8 +73,10 @@ export class SessionIndex {
 		if (terms.length === 0) return [];
 		const matches: string[] = [];
 		for (const session of this.sessions) {
-			const haystack = `${session.name ?? ""}\n${session.cwd}\n${session.allMessagesText}`.toLowerCase();
-			if (terms.every((term) => haystack.includes(term))) matches.push(session.path);
+			const haystack =
+				`${session.name ?? ""}\n${session.cwd}\n${session.allMessagesText}`.toLowerCase();
+			if (terms.every((term) => haystack.includes(term)))
+				matches.push(session.path);
 			if (matches.length >= SEARCH_LIMIT) break;
 		}
 		return matches;
@@ -93,7 +112,9 @@ export class SessionIndex {
 		const started = Date.now();
 		try {
 			this.sessions = await SessionManager.listAll();
-			log.debug(`Indexed ${this.sessions.length} sessions in ${Date.now() - started}ms`);
+			log.debug(
+				`Indexed ${this.sessions.length} sessions in ${Date.now() - started}ms`,
+			);
 		} catch (error) {
 			log.error("Failed to list pi sessions", error);
 		}
@@ -101,12 +122,19 @@ export class SessionIndex {
 }
 
 export function isSessionFile(path: string): boolean {
-	if (typeof path !== "string" || !isAbsolute(path) || !path.endsWith(".jsonl")) return false;
+	if (typeof path !== "string" || !isAbsolute(path) || !path.endsWith(".jsonl"))
+		return false;
 	const rel = relative(sessionsRoot(), resolve(path));
 	return !rel.startsWith("..") && !isAbsolute(rel) && existsSync(path);
 }
 
+function isHiddenFirstMessage(text: string): boolean {
+	const trimmed = text.trim();
+	return trimmed.startsWith("/desktop-") || trimmed.startsWith("/mcp-auth ");
+}
+
 function toSummary(info: SessionInfo): SessionSummary {
+	const firstMessage = isHiddenFirstMessage(info.firstMessage) ? "" : info.firstMessage;
 	return {
 		path: info.path,
 		id: info.id,
@@ -116,6 +144,6 @@ function toSummary(info: SessionInfo): SessionSummary {
 		created: info.created.getTime(),
 		modified: info.modified.getTime(),
 		messageCount: info.messageCount,
-		firstMessage: info.firstMessage.slice(0, 300),
+		firstMessage: firstMessage.slice(0, 300),
 	};
 }

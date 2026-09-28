@@ -64,6 +64,18 @@ export default function desktopBridge(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("desktop-mcp-auth", {
+		description: "Internal: start MCP auth for a server without exposing the transport command",
+		handler: async (args, ctx) => {
+			const server = args.trim();
+			if (!server) {
+				ctx.ui.notify("Missing MCP server name.", "warning");
+				return;
+			}
+			pi.sendUserMessage(`/mcp-auth ${server}`, { expandPromptTemplates: true });
+		},
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		if (ctx.mode !== "rpc") return undefined;
 		if (!needsApproval(mode, event.toolName, alwaysAllowed)) return undefined;

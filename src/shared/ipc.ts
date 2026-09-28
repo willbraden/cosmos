@@ -15,13 +15,23 @@ export interface DesktopSettings {
 	idleSuspendMinutes: number;
 	/** Absolute path to a pi CLI entry script. Empty uses the bundled pi. */
 	piCliPath: string;
+	/** Absolute path to a pi agent dir (settings.json, auth.json, sessions/). Empty uses pi's default/inherited location. */
+	agentDirPath: string;
+	/** Optional absolute GLAYVIN_HOME override for custom installs. Empty uses the environment or an inferred value. */
+	glayvinHomePath: string;
+	/** Absolute path to the Cosmos workspace root. Empty uses ~/Cosmos. */
+	workspaceRootPath: string;
 	/** Session file paths pinned to the top of the sidebar. */
 	pinnedSessions: string[];
+	/** Manual per-folder session order for sidebar accordion sections. */
+	sidebarSessionOrder: Record<string, string[]>;
 	/** Most recently used project folders, newest first. */
 	recentProjects: string[];
 	/** Message send behaviour while pi is working. */
 	busySendMode: "steer" | "followUp";
 	sidebarCollapsed: boolean;
+	/** Enables hidden developer-only tools like UI inspect mode. */
+	developerMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -30,10 +40,15 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
 	notifications: true,
 	idleSuspendMinutes: 15,
 	piCliPath: "",
+	agentDirPath: "",
+	glayvinHomePath: "",
+	workspaceRootPath: "",
 	pinnedSessions: [],
+	sidebarSessionOrder: {},
 	recentProjects: [],
 	busySendMode: "steer",
 	sidebarCollapsed: false,
+	developerMode: false,
 };
 
 export interface SessionSummary {
@@ -56,7 +71,82 @@ export interface AppInfo {
 	platform: NodeJS.Platform;
 	homeDir: string;
 	agentDir: string;
+	glayvinHome?: string;
+	workspaceRoot: string;
+	profileSource: "cosmos-managed" | "glayvin" | "custom";
 	logPath: string;
+}
+
+export interface WorkspaceRepoHealth {
+	name: string;
+	path: string;
+	exists: boolean;
+	isDirectory: boolean;
+	isGitRepo: boolean;
+}
+
+export interface WorkspaceHealth {
+	rootPath: string;
+	rootExists: boolean;
+	rootIsDirectory: boolean;
+	/** Curated sibling repos expected in the shared Cosmos workspace. */
+	repos: WorkspaceRepoHealth[];
+	/** Other sibling directories under the workspace root, treated as experiments. */
+	experiments: WorkspaceRepoHealth[];
+	readyRepos: number;
+}
+
+export interface McpServerDefinition {
+	name: string;
+	active: boolean;
+	personal: boolean;
+	disabled: boolean;
+	transport: string;
+	url?: string;
+	command?: string;
+	args: string[];
+	auth?: string;
+	tools: string[];
+	oauthConnected?: boolean;
+	oauthTokensPath?: string;
+	config: Record<string, unknown>;
+}
+
+export interface McpConfigOverview {
+	available: boolean;
+	glayvinHome?: string;
+	agentDir: string;
+	mergedConfigPath?: string;
+	personalConfigPath?: string;
+	personalDisabledPath?: string;
+	adapterConfigPath?: string;
+	servers: McpServerDefinition[];
+	notes: string[];
+}
+
+export interface FigmaXcodeAuthStatus {
+	xcodeInstalled: boolean;
+	xcodeAppPath?: string;
+	xcodePluginInstalled: boolean;
+	xcodeHasFigmaServer: boolean;
+	xcodeHasBearerToken: boolean;
+	xcodeMcpConfigPath: string;
+	xcodePluginPath: string;
+	piOAuthConnected: boolean;
+	piOAuthTokensPath: string;
+}
+
+export interface FigmaXcodeImportResult {
+	imported: boolean;
+	alreadyConnected: boolean;
+	message: string;
+	status: FigmaXcodeAuthStatus;
+}
+
+export interface FigmaAuthResetResult {
+	removed: boolean;
+	message: string;
+	status: FigmaXcodeAuthStatus;
 }
 
 export interface OpenSessionRequest {
@@ -102,7 +192,10 @@ export type AuthPromptRequest = {
 	placeholder?: string;
 } & (
 	| { kind: "text" | "secret" | "manual_code" }
-	| { kind: "select"; options: { id: string; label: string; description?: string }[] }
+	| {
+			kind: "select";
+			options: { id: string; label: string; description?: string }[];
+	  }
 );
 
 export type AuthProgressEvent =
@@ -120,7 +213,14 @@ export interface FileMatch {
 	isDirectory: boolean;
 }
 
-export type SessionMenuAction = "rename" | "pin" | "unpin" | "reveal" | "copyPath" | "exportHtml" | "delete";
+export type SessionMenuAction =
+	| "rename"
+	| "pin"
+	| "unpin"
+	| "reveal"
+	| "copyPath"
+	| "exportHtml"
+	| "delete";
 
 export type MenuCommand =
 	| "new-session"
@@ -134,18 +234,33 @@ export type MenuCommand =
 	| "export-html"
 	| "next-session"
 	| "prev-session"
-	| "focus-composer";
+	| "focus-composer"
+	| "reset-figma";
 
 /** Surface exposed on `window.pi` by the preload script. */
 export interface DesktopApi {
 	getAppInfo(): Promise<AppInfo>;
 	getSettings(): Promise<DesktopSettings>;
 	updateSettings(patch: Partial<DesktopSettings>): Promise<DesktopSettings>;
+	getWorkspaceHealth(): Promise<WorkspaceHealth>;
+	getMcpOverview(): Promise<McpConfigOverview>;
+	getFigmaXcodeAuthStatus(): Promise<FigmaXcodeAuthStatus>;
+	launchFigmaXcodePluginInstall(): Promise<void>;
+	importXcodeFigmaAuth(): Promise<FigmaXcodeImportResult>;
+	resetFigmaAuth(): Promise<FigmaAuthResetResult>;
+	upsertPersonalMcpServer(
+		name: string,
+		config: Record<string, unknown>,
+	): Promise<McpConfigOverview>;
+	removePersonalMcpServer(name: string): Promise<McpConfigOverview>;
 
 	listSessions(): Promise<SessionSummary[]>;
 	searchSessions(query: string): Promise<string[]>;
 	deleteSession(path: string): Promise<void>;
-	sessionContextMenu(path: string, pinned: boolean): Promise<SessionMenuAction | null>;
+	sessionContextMenu(
+		path: string,
+		pinned: boolean,
+	): Promise<SessionMenuAction | null>;
 
 	openSession(request: OpenSessionRequest): Promise<void>;
 	sendCommand<T = unknown>(tabId: string, command: PiCommand): Promise<T>;
@@ -154,6 +269,7 @@ export interface DesktopApi {
 	setVisibleSession(tabId: string | null): void;
 
 	pickFolder(): Promise<string | null>;
+	createExperiment(name: string): Promise<string>;
 	searchFiles(cwd: string, query: string): Promise<FileMatch[]>;
 	/** Absolute path of a file dropped or pasted from Finder ("" if it has none). */
 	getPathForFile(file: File): string;

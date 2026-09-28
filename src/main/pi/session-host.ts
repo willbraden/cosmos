@@ -17,6 +17,7 @@ export interface HostEnvironment {
 	cliPath(): string;
 	extensionPath: string;
 	env(): Promise<NodeJS.ProcessEnv>;
+	workspaceRoot(): string;
 	idleSuspendMinutes(): number;
 }
 
@@ -38,7 +39,12 @@ interface Tab {
 
 const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 /** Commands after which pi may be attached to a different session file. */
-const SESSION_CHANGING = new Set(["new_session", "switch_session", "fork", "clone"]);
+const SESSION_CHANGING = new Set([
+	"new_session",
+	"switch_session",
+	"fork",
+	"clone",
+]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VALID_MODES = new Set<PermissionMode>(["ask", "acceptEdits", "auto"]);
 const FLUSH_MS = 16;
@@ -63,20 +69,29 @@ export class SessionHost {
 	}
 
 	async open(request: OpenSessionRequest): Promise<void> {
-		if (typeof request.tabId !== "string" || !UUID.test(request.tabId)) throw new Error("Invalid session id");
-		if (this.tabs.has(request.tabId)) throw new Error("Session id already in use");
-		if (!isExistingDirectory(request.cwd)) throw new Error(`Project folder does not exist: ${request.cwd}`);
+		if (typeof request.tabId !== "string" || !UUID.test(request.tabId))
+			throw new Error("Invalid session id");
+		if (this.tabs.has(request.tabId))
+			throw new Error("Session id already in use");
+		if (!isExistingDirectory(request.cwd))
+			throw new Error(`Project folder does not exist: ${request.cwd}`);
 		if (request.sessionPath !== undefined) {
-			if (!isAbsolute(request.sessionPath) || !request.sessionPath.endsWith(".jsonl")) {
+			if (
+				!isAbsolute(request.sessionPath) ||
+				!request.sessionPath.endsWith(".jsonl")
+			) {
 				throw new Error("Invalid session path");
 			}
-			if (!existsSync(request.sessionPath)) throw new Error(`Session file not found: ${request.sessionPath}`);
+			if (!existsSync(request.sessionPath))
+				throw new Error(`Session file not found: ${request.sessionPath}`);
 		}
 		const tab: Tab = {
 			id: request.tabId,
 			cwd: request.cwd,
 			sessionPath: request.sessionPath,
-			permissionMode: VALID_MODES.has(request.permissionMode) ? request.permissionMode : "ask",
+			permissionMode: VALID_MODES.has(request.permissionMode)
+				? request.permissionMode
+				: "ask",
 			proc: null,
 			starting: null,
 			busy: false,
@@ -98,33 +113,46 @@ export class SessionHost {
 		const tab = this.requireTab(tabId);
 		tab.lastActivity = Date.now();
 
-		// Desktop-only pseudo command: permission mode lives in the bridge extension.
+		// Desktop-only pseudo command: keep the chosen mode on the tab, then restart
+		// the pi process so the bridge extension re-reads PI_DESKTOP_PERMISSION_MODE.
 		if (command.type === "desktop_set_permission_mode") {
 			const mode = command.mode as PermissionMode;
 			if (!VALID_MODES.has(mode)) throw new Error("Invalid permission mode");
 			tab.permissionMode = mode;
 			if (tab.proc?.running) {
-				await tab.proc.request({ type: "prompt", message: `/desktop-permission-mode ${mode}` });
+				if (tab.busy || tab.openDialogs.size > 0) tab.stale = true;
+				else await this.suspend(tab, "permission mode changed");
 			}
 			return null;
 		}
 
 		const proc = await this.ensureProcess(tab);
-		if (command.type === "prompt" || command.type === "steer" || command.type === "follow_up") tab.busy = true;
+		if (
+			command.type === "prompt" ||
+			command.type === "steer" ||
+			command.type === "follow_up"
+		)
+			tab.busy = true;
 		const data = await proc.request(command);
-		if (SESSION_CHANGING.has(command.type)) await this.refreshSessionPath(tab, proc);
+		if (SESSION_CHANGING.has(command.type))
+			await this.refreshSessionPath(tab, proc);
 		return data;
 	}
 
 	respondToUi(tabId: string, response: Record<string, unknown>): void {
 		const tab = this.requireTab(tabId);
-		if (typeof response.id !== "string") throw new Error("UI response needs the request id");
+		if (typeof response.id !== "string")
+			throw new Error("UI response needs the request id");
 		tab.openDialogs.delete(response.id);
 		tab.lastActivity = Date.now();
 		// Only these fields are part of the extension_ui_response record.
-		const record: Record<string, unknown> = { type: "extension_ui_response", id: response.id };
+		const record: Record<string, unknown> = {
+			type: "extension_ui_response",
+			id: response.id,
+		};
 		if (response.cancelled === true) record.cancelled = true;
-		else if (typeof response.confirmed === "boolean") record.confirmed = response.confirmed;
+		else if (typeof response.confirmed === "boolean")
+			record.confirmed = response.confirmed;
 		else if (typeof response.value === "string") record.value = response.value;
 		else record.cancelled = true;
 		tab.proc?.send(record);
@@ -157,7 +185,9 @@ export class SessionHost {
 		clearInterval(this.idleTimer);
 		// Let in-flight starts settle so none spawns pi after shutdown began.
 		await Promise.allSettled([...this.tabs.values()].map((tab) => tab.starting));
-		await Promise.all([...this.tabs.values()].map((tab) => this.stopProcess(tab)));
+		await Promise.all(
+			[...this.tabs.values()].map((tab) => this.stopProcess(tab)),
+		);
 		this.tabs.clear();
 	}
 
@@ -178,9 +208,17 @@ export class SessionHost {
 	}
 
 	private async startProcess(tab: Tab): Promise<PiProcess> {
-		const args = [this.host.launcherPath, this.host.cliPath(), "--mode", "rpc", "-e", this.host.extensionPath];
+		const args = [
+			this.host.launcherPath,
+			this.host.cliPath(),
+			"--mode",
+			"rpc",
+			"-e",
+			this.host.extensionPath,
+		];
 		// A new session only gets a file once it has messages; resume it only if it exists.
-		if (tab.sessionPath && existsSync(tab.sessionPath)) args.push("--session", tab.sessionPath);
+		if (tab.sessionPath && existsSync(tab.sessionPath))
+			args.push("--session", tab.sessionPath);
 
 		const baseEnv = await this.host.env();
 		if (this.disposed) throw new Error("Cosmos is shutting down");
@@ -190,35 +228,61 @@ export class SessionHost {
 			cwd: tab.cwd,
 			env: {
 				...baseEnv,
+				...(process.env.PI_CODING_AGENT_DIR
+					? { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR }
+					: {}),
+				...(process.env.GLAYVIN_HOME
+					? { GLAYVIN_HOME: process.env.GLAYVIN_HOME }
+					: {}),
 				ELECTRON_RUN_AS_NODE: "1",
 				PI_DESKTOP: "1",
+				COSMOS_DESKTOP: "1",
+				COSMOS_WORKSPACE_ROOT: this.host.workspaceRoot(),
+				COSMOS_SESSION_CWD: tab.cwd,
 				PI_DESKTOP_PERMISSION_MODE: tab.permissionMode,
 			},
 		});
 
 		proc.on("record", (record: PiRecord) => this.handleRecord(tab, record));
-		proc.on("stderr", (text: string) => log.debug(`[pi ${proc.pid}] ${text.trimEnd()}`));
-		proc.once("exit", (code: number | null, signal: string | null, stderrTail: string) => {
-			if (tab.proc === proc) tab.proc = null;
-			tab.busy = false;
-			tab.openDialogs.clear();
-			if (tab.stopping || !this.tabs.has(tab.id)) return;
-			log.error(`pi exited unexpectedly (code ${code}, signal ${signal}) for ${tab.sessionPath ?? tab.cwd}`, stderrTail);
-			this.flush();
-			this.sink.exit({ tabId: tab.id, reason: "crashed", message: lastLines(stderrTail, 12) });
-		});
+		proc.on("stderr", (text: string) =>
+			log.debug(`[pi ${proc.pid}] ${text.trimEnd()}`),
+		);
+		proc.once(
+			"exit",
+			(code: number | null, signal: string | null, stderrTail: string) => {
+				if (tab.proc === proc) tab.proc = null;
+				tab.busy = false;
+				tab.openDialogs.clear();
+				if (tab.stopping || !this.tabs.has(tab.id)) return;
+				log.error(
+					`pi exited unexpectedly (code ${code}, signal ${signal}) for ${tab.sessionPath ?? tab.cwd}`,
+					stderrTail,
+				);
+				this.flush();
+				this.sink.exit({
+					tabId: tab.id,
+					reason: "crashed",
+					message: lastLines(stderrTail, 12),
+				});
+			},
+		);
 
 		proc.start();
 		tab.proc = proc;
 		try {
 			// Pi answers get_state once its runtime is ready; this doubles as the startup check.
-			const state = await proc.request<SessionState>({ type: "get_state" }, 60_000);
+			const state = await proc.request<SessionState>(
+				{ type: "get_state" },
+				60_000,
+			);
 			tab.sessionPath = state.sessionFile ?? tab.sessionPath;
 		} catch (error) {
 			const stderr = lastLines(proc.recentStderr, 12);
 			await proc.stop(500).catch(() => undefined);
 			if (tab.proc === proc) tab.proc = null;
-			throw new Error(`pi failed to start: ${(error as Error).message}${stderr ? `\n${stderr}` : ""}`);
+			throw new Error(
+				`pi failed to start: ${(error as Error).message}${stderr ? `\n${stderr}` : ""}`,
+			);
 		}
 		return proc;
 	}
@@ -236,7 +300,8 @@ export class SessionHost {
 			case "agent_settled":
 				tab.busy = false;
 				tab.lastActivity = Date.now();
-				if (tab.stale && tab.openDialogs.size === 0) void this.suspend(tab, "credentials changed");
+				if (tab.stale && tab.openDialogs.size === 0)
+					void this.suspend(tab, "permission mode changed");
 				break;
 			case "extension_ui_request":
 				if (DIALOG_METHODS.has(record.method)) tab.openDialogs.add(record.id);
@@ -271,8 +336,13 @@ export class SessionHost {
 		}
 	}
 
-	private async suspend(tab: Tab, reason: "idle" | "credentials changed"): Promise<void> {
-		log.info(`Stopping pi process (${reason}; restarts on next use) for ${tab.sessionPath ?? tab.cwd}`);
+	private async suspend(
+		tab: Tab,
+		reason: "idle" | "credentials changed" | "permission mode changed",
+	): Promise<void> {
+		log.info(
+			`Stopping pi process (${reason}; restarts on next use) for ${tab.sessionPath ?? tab.cwd}`,
+		);
 		tab.stale = false;
 		await this.stopProcess(tab);
 		this.flush();
@@ -300,7 +370,9 @@ function lastLines(text: string, count: number): string {
 
 function isExistingDirectory(path: string): boolean {
 	try {
-		return typeof path === "string" && isAbsolute(path) && statSync(path).isDirectory();
+		return (
+			typeof path === "string" && isAbsolute(path) && statSync(path).isDirectory()
+		);
 	} catch {
 		return false;
 	}

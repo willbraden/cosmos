@@ -4,7 +4,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // @ts-expect-error untyped test helper
@@ -17,6 +17,16 @@ import { PERMISSION_OPTIONS, PERMISSION_PROMPT_MARKER, type PiRecord } from "../
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
 const electronPath = require("electron") as unknown as string;
+const childPath = process.platform !== "darwin"
+	? electronPath
+	: join(
+		dirname(dirname(electronPath)),
+		"Frameworks",
+		`${basename(electronPath)} Helper.app`,
+		"Contents",
+		"MacOS",
+		`${basename(electronPath)} Helper`,
+	);
 const piCli = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "bundle", "cli.js");
 
 let server: { port: number; requests: unknown[]; close(): Promise<void> };
@@ -25,7 +35,7 @@ let agentDir: string;
 
 function launch(permissionMode: string, extraArgs: string[] = []): PiProcess {
 	const proc = new PiProcess({
-		command: electronPath,
+		command: childPath,
 		args: [
 			join(root, "resources/pi-launcher.mjs"),
 			piCli,

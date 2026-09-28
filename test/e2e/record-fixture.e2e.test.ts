@@ -3,7 +3,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 // @ts-expect-error untyped test helper
@@ -14,6 +14,16 @@ import { PiProcess } from "../../src/main/pi/pi-process";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const electronPath = createRequire(import.meta.url)("electron") as unknown as string;
+const childPath = process.platform !== "darwin"
+	? electronPath
+	: join(
+		dirname(dirname(electronPath)),
+		"Frameworks",
+		`${basename(electronPath)} Helper.app`,
+		"Contents",
+		"MacOS",
+		`${basename(electronPath)} Helper`,
+	);
 const piCli = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "bundle", "cli.js");
 
 it.runIf(process.env.RECORD_FIXTURES === "1")("records a tool-using conversation", async () => {
@@ -21,7 +31,7 @@ it.runIf(process.env.RECORD_FIXTURES === "1")("records a tool-using conversation
 	const workDir = mkdtempSync(join(tmpdir(), "pi-fixture-work-"));
 	const agentDir = writeFakePiHome(mkdtempSync(join(tmpdir(), "pi-fixture-agent-")), server.port);
 	const proc = new PiProcess({
-		command: electronPath,
+		command: childPath,
 		args: [join(root, "resources/pi-launcher.mjs"), piCli, "--mode", "rpc", "-e", join(root, "resources/pi-extension/desktop-bridge.ts")],
 		cwd: workDir,
 		env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PI_DESKTOP: "1", PI_DESKTOP_PERMISSION_MODE: "auto", PI_CODING_AGENT_DIR: agentDir },

@@ -1,33 +1,110 @@
 import type { SessionSummary } from "@shared/ipc";
-import { ChevronRight, FolderPlus, PanelLeftClose, Pin, Plus, Search, Settings, SquarePen } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+	applyManualSessionOrder,
+	compareSessionOrder,
+	moveSessionOrderItem,
+	type SessionDropPlacement,
+} from "@shared/session-order";
+import {
+	ChevronRight,
+	FolderPlus,
+	PanelLeftClose,
+	Pin,
+	Plus,
+	Search,
+	Settings,
+	SquarePen,
+} from "lucide-react";
+import {
+	memo,
+	type DragEvent,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { api, basename, relativeTime, tildify } from "../lib/api";
+import { firstUserMessage } from "../state/chat-model";
 import {
 	activateTab,
-	chooseFolderAndStart,
 	deleteSession,
 	exportHtml,
 	openExistingSession,
 	renameSessionByPath,
 	runSearch,
+	showWorkspaceDashboard,
 	startNewSession,
 	tabForSession,
 	togglePin,
 } from "../state/actions";
-import { activeTab, sessionTitle, type TabState, useStore } from "../state/store";
+import {
+	activeTab,
+	sessionTitle,
+	type TabState,
+	useStore,
+} from "../state/store";
 
 const GROUP_PREVIEW = 6;
 
 interface Row {
 	key: string;
+	stableKey: string;
 	title: string;
 	cwd: string;
+	created: number;
 	modified: number;
 	summary?: SessionSummary;
 	tab?: TabState;
 }
 
-const SessionRow = memo(function SessionRow({ row, active, pinned }: { row: Row; active: boolean; pinned: boolean }) {
+type DragState = {
+	cwd: string;
+	draggingKey: string;
+	overKey: string | null;
+	placement: SessionDropPlacement;
+};
+
+function firstTimestamp(tab: TabState): number | undefined {
+	for (const item of tab.chat.items)
+		if ("timestamp" in item && typeof item.timestamp === "number")
+			return item.timestamp;
+	return undefined;
+}
+
+function lastTimestamp(tab: TabState): number | undefined {
+	for (let i = tab.chat.items.length - 1; i >= 0; i--) {
+		const item = tab.chat.items[i];
+		if ("timestamp" in item && typeof item.timestamp === "number")
+			return item.timestamp;
+	}
+	return undefined;
+}
+
+const SessionRow = memo(function SessionRow({
+	row,
+	active,
+	pinned,
+	draggable = false,
+	dragging = false,
+	dropBefore = false,
+	dropAfter = false,
+	onDragStart,
+	onDragOver,
+	onDrop,
+	onDragEnd,
+}: {
+	row: Row;
+	active: boolean;
+	pinned: boolean;
+	draggable?: boolean;
+	dragging?: boolean;
+	dropBefore?: boolean;
+	dropAfter?: boolean;
+	onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
+	onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
+	onDrop?: (event: DragEvent<HTMLDivElement>) => void;
+	onDragEnd?: () => void;
+}) {
 	const [renaming, setRenaming] = useState(false);
 	const [value, setValue] = useState(row.title);
 	const tab = row.tab;
@@ -66,7 +143,8 @@ const SessionRow = memo(function SessionRow({ row, active, pinned }: { row: Row;
 				break;
 			}
 			case "delete":
-				if (window.confirm(`Move "${row.title}" to the Trash?`)) await deleteSession(path);
+				if (window.confirm(`Move "${row.title}" to the Trash?`))
+					await deleteSession(path);
 				break;
 		}
 	};
@@ -82,7 +160,8 @@ const SessionRow = memo(function SessionRow({ row, active, pinned }: { row: Row;
 				onChange={(e) => setValue(e.target.value)}
 				onBlur={() => {
 					setRenaming(false);
-					if (row.summary && value.trim() && value.trim() !== row.title) void renameSessionByPath(row.summary.path, row.cwd, value);
+					if (row.summary && value.trim() && value.trim() !== row.title)
+						void renameSessionByPath(row.summary.path, row.cwd, value);
 				}}
 				onKeyDown={(e) => {
 					if (e.key === "Enter") e.currentTarget.blur();
@@ -96,12 +175,24 @@ const SessionRow = memo(function SessionRow({ row, active, pinned }: { row: Row;
 	}
 
 	return (
-		<button
-			type="button"
-			className={`session-row${active ? " active" : ""}${tab?.unread ? " unread" : ""}`}
+		<div
+			role="button"
+			tabIndex={0}
+			className={`session-row${active ? " active" : ""}${tab?.unread ? " unread" : ""}${draggable ? " draggable" : ""}${dragging ? " dragging" : ""}${dropBefore ? " drop-before" : ""}${dropAfter ? " drop-after" : ""}`}
 			onClick={open}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					open();
+				}
+			}}
 			onContextMenu={onContextMenu}
 			title={row.title}
+			draggable={draggable}
+			onDragStart={onDragStart}
+			onDragOver={onDragOver}
+			onDrop={onDrop}
+			onDragEnd={onDragEnd}
 		>
 			{busy ? (
 				<span className="spinner" title="Working" />
@@ -112,36 +203,148 @@ const SessionRow = memo(function SessionRow({ row, active, pinned }: { row: Row;
 			) : null}
 			<span className="title">{row.title}</span>
 			<span className="meta">{relativeTime(row.modified)}</span>
-		</button>
+		</div>
 	);
 });
 
-function Group({ cwd, rows, activeKey, pinned }: { cwd: string; rows: Row[]; activeKey: string | null; pinned: Set<string> }) {
+function dropPlacementForEvent(
+	event: DragEvent<HTMLDivElement>,
+): SessionDropPlacement {
+	const rect = event.currentTarget.getBoundingClientRect();
+	return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
+
+function Group({
+	cwd,
+	rows,
+	activeKey,
+	pinned,
+	dragState,
+	onStartDrag,
+	onHoverRow,
+	onHoverEnd,
+	onDropRow,
+	onDropEnd,
+	onEndDrag,
+}: {
+	cwd: string;
+	rows: Row[];
+	activeKey: string | null;
+	pinned: Set<string>;
+	dragState: DragState | null;
+	onStartDrag(cwd: string, stableKey: string): void;
+	onHoverRow(
+		cwd: string,
+		stableKey: string,
+		placement: SessionDropPlacement,
+	): void;
+	onHoverEnd(cwd: string): void;
+	onDropRow(
+		cwd: string,
+		rows: Row[],
+		stableKey: string,
+		placement: SessionDropPlacement,
+	): Promise<void>;
+	onDropEnd(cwd: string, rows: Row[]): Promise<void>;
+	onEndDrag(): void;
+}) {
 	const home = useStore((s) => s.appInfo?.homeDir);
 	const [collapsed, setCollapsed] = useState(false);
 	const [expanded, setExpanded] = useState(false);
-	const visible = expanded ? rows : rows.slice(0, GROUP_PREVIEW);
+	const visible = expanded ? [...rows] : rows.slice(0, GROUP_PREVIEW);
+	const draggingInGroup = dragState?.cwd === cwd;
 	// Always keep the active session visible even when the group is truncated.
 	const activeRow = rows.find((r) => r.key === activeKey);
 	if (activeRow && !visible.includes(activeRow)) visible.push(activeRow);
 	return (
 		<div className="sidebar-section">
 			<div style={{ display: "flex", alignItems: "center" }}>
-				<button type="button" className="sidebar-section-header" onClick={() => setCollapsed(!collapsed)} title={tildify(cwd, home)}>
-					<ChevronRight size={12} style={{ transform: collapsed ? undefined : "rotate(90deg)", transition: "transform .15s" }} />
+				<button
+					type="button"
+					className="sidebar-section-header"
+					onClick={() => setCollapsed(!collapsed)}
+					title={tildify(cwd, home)}
+				>
+					<ChevronRight
+						size={12}
+						style={{
+							transform: collapsed ? undefined : "rotate(90deg)",
+							transition: "transform .15s",
+						}}
+					/>
 					{basename(cwd) || cwd}
 				</button>
-				<button type="button" className="icon-btn" style={{ width: 22, height: 22 }} title={`New session in ${basename(cwd)}`} onClick={() => void startNewSession(cwd)}>
+				<button
+					type="button"
+					className="icon-btn"
+					style={{ width: 22, height: 22 }}
+					title={`New session in ${basename(cwd)}`}
+					onClick={() => void startNewSession(cwd)}
+				>
 					<Plus size={13} />
 				</button>
 			</div>
 			{!collapsed && (
 				<>
-					{visible.map((row) => (
-						<SessionRow key={row.key} row={row} active={row.key === activeKey} pinned={pinned.has(row.key)} />
-					))}
+					{visible.map((row) => {
+						const dragOver =
+							dragState?.cwd === cwd && dragState.overKey === row.stableKey;
+						return (
+							<SessionRow
+								key={row.key}
+								row={row}
+								active={row.key === activeKey}
+								pinned={pinned.has(row.key)}
+								draggable
+								dragging={dragState?.draggingKey === row.stableKey}
+								dropBefore={dragOver && dragState?.placement === "before"}
+								dropAfter={dragOver && dragState?.placement === "after"}
+								onDragStart={(event) => {
+									event.dataTransfer.effectAllowed = "move";
+									event.dataTransfer.setData("text/plain", row.stableKey);
+									if (rows.length > GROUP_PREVIEW) setExpanded(true);
+									onStartDrag(cwd, row.stableKey);
+								}}
+								onDragOver={(event) => {
+									event.preventDefault();
+									if (dragState?.draggingKey === row.stableKey) return;
+									event.dataTransfer.dropEffect = "move";
+									onHoverRow(cwd, row.stableKey, dropPlacementForEvent(event));
+								}}
+								onDrop={async (event) => {
+									event.preventDefault();
+									await onDropRow(
+										cwd,
+										rows,
+										row.stableKey,
+										dropPlacementForEvent(event),
+									);
+								}}
+								onDragEnd={onEndDrag}
+							/>
+						);
+					})}
+					{draggingInGroup && (
+						<div
+							className={`session-dropzone${dragState?.overKey === null && dragState.placement === "end" ? " active" : ""}`}
+							onDragOver={(event) => {
+								event.preventDefault();
+								event.dataTransfer.dropEffect = "move";
+								onHoverEnd(cwd);
+							}}
+							onDrop={async (event) => {
+								event.preventDefault();
+								await onDropEnd(cwd, rows);
+							}}
+						/>
+					)}
 					{rows.length > GROUP_PREVIEW && (
-						<button type="button" className="session-row" style={{ color: "var(--text-3)", fontSize: 12 }} onClick={() => setExpanded(!expanded)}>
+						<button
+							type="button"
+							className="session-row"
+							style={{ color: "var(--text-3)", fontSize: 12 }}
+							onClick={() => setExpanded(!expanded)}
+						>
 							{expanded ? "Show less" : `Show ${rows.length - GROUP_PREVIEW} more`}
 						</button>
 					)}
@@ -152,15 +355,18 @@ function Group({ cwd, rows, activeKey, pinned }: { cwd: string; rows: Row[]; act
 }
 
 export function Sidebar() {
+	const settings = useStore((s) => s.settings);
 	const sessions = useStore((s) => s.sessions);
 	const tabs = useStore((s) => s.tabs);
 	const activeTabId = useStore((s) => s.activeTabId);
-	const pinnedPaths = useStore((s) => s.settings.pinnedSessions);
+	const pinnedPaths = settings.pinnedSessions ?? [];
+	const sidebarSessionOrder = settings.sidebarSessionOrder ?? {};
 	const searchQuery = useStore((s) => s.searchQuery);
 	const searchMatches = useStore((s) => s.searchMatches);
 	const sessionsLoaded = useStore((s) => s.sessionsLoaded);
 	const focusSearchTick = useStore((s) => s.focusSearchTick);
 	const searchRef = useRef<HTMLInputElement>(null);
+	const [dragState, setDragState] = useState<DragState | null>(null);
 
 	useEffect(() => {
 		if (focusSearchTick > 0) searchRef.current?.focus();
@@ -168,13 +374,21 @@ export function Sidebar() {
 
 	const rows = useMemo(() => {
 		const tabsByPath = new Map<string, TabState>();
-		for (const tab of Object.values(tabs)) if (tab.sessionPath) tabsByPath.set(tab.sessionPath, tab);
+		for (const tab of Object.values(tabs))
+			if (tab.sessionPath) tabsByPath.set(tab.sessionPath, tab);
 		const list: Row[] = sessions.map((summary) => {
 			const tab = tabsByPath.get(summary.path);
 			return {
 				key: summary.path,
-				title: sessionTitle(tab?.name ? { name: tab.name } : summary),
+				stableKey: summary.path,
+				title: sessionTitle(
+					tab?.name ? { name: tab.name } : summary,
+					"New session",
+					tab ? firstUserMessage(tab.chat) : undefined,
+					tab?.autoTitle,
+				),
 				cwd: summary.cwd,
+				created: summary.created,
 				modified: summary.modified,
 				summary,
 				tab,
@@ -185,7 +399,22 @@ export function Sidebar() {
 		for (const tab of Object.values(tabs)) {
 			if (tab.sessionPath && known.has(tab.sessionPath)) continue;
 			if (tab.chat.items.length === 0 && tab.tabId !== activeTabId) continue;
-			list.push({ key: tab.tabId, title: tab.name ?? "New session", cwd: tab.cwd, modified: Date.now(), tab });
+			const created = firstTimestamp(tab) ?? tab.openedAt;
+			const modified = lastTimestamp(tab) ?? created;
+			list.push({
+				key: tab.tabId,
+				stableKey: tab.tabId,
+				title: sessionTitle(
+					tab.name ? { name: tab.name } : undefined,
+					"New session",
+					firstUserMessage(tab.chat),
+					tab.autoTitle,
+				),
+				cwd: tab.cwd,
+				created,
+				modified,
+				tab,
+			});
 		}
 		return list;
 	}, [sessions, tabs, activeTabId]);
@@ -193,7 +422,9 @@ export function Sidebar() {
 	const activeKey = useMemo(() => {
 		const tab = activeTabId ? tabs[activeTabId] : undefined;
 		if (!tab) return null;
-		return tab.sessionPath && sessions.some((s) => s.path === tab.sessionPath) ? tab.sessionPath : tab.tabId;
+		return tab.sessionPath && sessions.some((s) => s.path === tab.sessionPath)
+			? tab.sessionPath
+			: tab.tabId;
 	}, [activeTabId, tabs, sessions]);
 
 	const pinned = useMemo(() => new Set(pinnedPaths), [pinnedPaths]);
@@ -206,8 +437,12 @@ export function Sidebar() {
 				pinnedRows: [],
 				groups: [],
 				results: rows
-					.filter((row) => row.title.toLowerCase().includes(query) || (row.summary && textMatches.has(row.summary.path)))
-					.sort((a, b) => b.modified - a.modified),
+					.filter(
+						(row) =>
+							row.title.toLowerCase().includes(query) ||
+							(row.summary && textMatches.has(row.summary.path)),
+					)
+					.sort(compareSessionOrder),
 			};
 		}
 		const byCwd = new Map<string, Row[]>();
@@ -216,20 +451,126 @@ export function Sidebar() {
 			if (pinned.has(row.key)) pinnedList.push(row);
 			else byCwd.set(row.cwd, [...(byCwd.get(row.cwd) ?? []), row]);
 		}
-		for (const list of byCwd.values()) list.sort((a, b) => b.modified - a.modified);
-		const ordered = [...byCwd.entries()].sort((a, b) => (b[1][0]?.modified ?? 0) - (a[1][0]?.modified ?? 0));
-		return { pinnedRows: pinnedList.sort((a, b) => b.modified - a.modified), groups: ordered, results: null };
-	}, [rows, query, searchMatches, pinned]);
+		const orderedGroups = [...byCwd.entries()]
+			.map(([cwd, list]) => {
+				const defaultRows = [...list].sort(compareSessionOrder);
+				return {
+					cwd,
+					sortKey: defaultRows[0] ?? {
+						created: 0,
+						modified: 0,
+						stableKey: cwd,
+					},
+					rows: applyManualSessionOrder(defaultRows, sidebarSessionOrder[cwd]),
+				};
+			})
+			.sort((a, b) => compareSessionOrder(a.sortKey, b.sortKey));
+		return {
+			pinnedRows: pinnedList.sort(compareSessionOrder),
+			groups: orderedGroups.map(({ cwd, rows }) => [cwd, rows] as const),
+			results: null,
+		};
+	}, [rows, query, searchMatches, pinned, sidebarSessionOrder]);
+
+	function startDrag(cwd: string, draggingKey: string): void {
+		setDragState({ cwd, draggingKey, overKey: null, placement: "end" });
+	}
+
+	function hoverRow(
+		cwd: string,
+		overKey: string,
+		placement: SessionDropPlacement,
+	): void {
+		setDragState((current) => {
+			if (!current || current.cwd !== cwd) return current;
+			if (current.draggingKey === overKey)
+				return { ...current, overKey: null, placement: "end" };
+			if (current.overKey === overKey && current.placement === placement)
+				return current;
+			return { ...current, overKey, placement };
+		});
+	}
+
+	function hoverEnd(cwd: string): void {
+		setDragState((current) => {
+			if (!current || current.cwd !== cwd) return current;
+			if (current.overKey === null && current.placement === "end") return current;
+			return { ...current, overKey: null, placement: "end" };
+		});
+	}
+
+	async function persistGroupOrder(
+		cwd: string,
+		nextOrder: string[],
+	): Promise<void> {
+		const deduped = [...new Set(nextOrder)];
+		const nextSettings = { ...sidebarSessionOrder, [cwd]: deduped };
+		useStore.setState((state) => ({
+			settings: { ...state.settings, sidebarSessionOrder: nextSettings },
+		}));
+		try {
+			await api.updateSettings({ sidebarSessionOrder: nextSettings });
+		} catch (error) {
+			api.log(
+				"error",
+				`save sidebar session order failed: ${String(error)}`,
+			);
+		}
+	}
+
+	async function dropRow(
+		cwd: string,
+		groupRows: Row[],
+		targetKey: string,
+		placement: SessionDropPlacement,
+	): Promise<void> {
+		const current = dragState;
+		setDragState(null);
+		if (!current || current.cwd !== cwd) return;
+		const currentOrder = groupRows.map((row) => row.stableKey);
+		const nextOrder = moveSessionOrderItem(
+			currentOrder,
+			current.draggingKey,
+			targetKey,
+			placement,
+		);
+		if (nextOrder.every((key, index) => key === currentOrder[index])) return;
+		await persistGroupOrder(cwd, nextOrder);
+	}
+
+	async function dropEnd(cwd: string, groupRows: Row[]): Promise<void> {
+		const current = dragState;
+		setDragState(null);
+		if (!current || current.cwd !== cwd) return;
+		const currentOrder = groupRows.map((row) => row.stableKey);
+		const nextOrder = moveSessionOrderItem(
+			currentOrder,
+			current.draggingKey,
+			null,
+			"end",
+		);
+		if (nextOrder.every((key, index) => key === currentOrder[index])) return;
+		await persistGroupOrder(cwd, nextOrder);
+	}
 
 	return (
 		<nav className="sidebar">
 			<div className="sidebar-top drag">
 				<div className="sidebar-top-row">
-					<button type="button" className="icon-btn" title="Hide sidebar (⌘\)" onClick={() => void api.updateSettings({ sidebarCollapsed: true })}>
+					<button
+						type="button"
+						className="icon-btn"
+						title="Hide sidebar (⌘\\)"
+						onClick={() => void api.updateSettings({ sidebarCollapsed: true })}
+					>
 						<PanelLeftClose size={16} />
 					</button>
 				</div>
-				<button type="button" className="new-session-btn" onClick={() => void startNewSession(activeTab()?.cwd)}>
+				<button
+					type="button"
+					className="new-session-btn"
+					onClick={() => void startNewSession(activeTab()?.cwd)}
+				>
 					<SquarePen size={15} /> New session <span className="kbd">⌘N</span>
 				</button>
 				<label className="search">
@@ -252,7 +593,14 @@ export function Sidebar() {
 			<div className="sidebar-list">
 				{results ? (
 					results.length ? (
-						results.map((row) => <SessionRow key={row.key} row={row} active={row.key === activeKey} pinned={pinned.has(row.key)} />)
+						results.map((row) => (
+							<SessionRow
+								key={row.key}
+								row={row}
+								active={row.key === activeKey}
+								pinned={pinned.has(row.key)}
+							/>
+						))
 					) : (
 						<div className="sidebar-empty">No sessions match "{searchQuery}"</div>
 					)
@@ -264,24 +612,55 @@ export function Sidebar() {
 									<Pin size={11} /> Pinned
 								</div>
 								{pinnedRows.map((row) => (
-									<SessionRow key={row.key} row={row} active={row.key === activeKey} pinned />
+									<SessionRow
+										key={row.key}
+										row={row}
+										active={row.key === activeKey}
+										pinned
+									/>
 								))}
 							</div>
 						)}
 						{groups.map(([cwd, list]) => (
-							<Group key={cwd} cwd={cwd} rows={list} activeKey={activeKey} pinned={pinned} />
+							<Group
+								key={cwd}
+								cwd={cwd}
+								rows={list}
+								activeKey={activeKey}
+								pinned={pinned}
+								dragState={dragState}
+								onStartDrag={startDrag}
+								onHoverRow={hoverRow}
+								onHoverEnd={hoverEnd}
+								onDropRow={dropRow}
+								onDropEnd={dropEnd}
+								onEndDrag={() => setDragState(null)}
+							/>
 						))}
-						{sessionsLoaded && rows.length === 0 && <div className="sidebar-empty">Your pi sessions will show up here, grouped by project.</div>}
+						{sessionsLoaded && rows.length === 0 && (
+							<div className="sidebar-empty">
+								Your pi sessions will show up here, grouped by project.
+							</div>
+						)}
 					</>
 				)}
 			</div>
 			<div className="sidebar-footer">
-				<button type="button" className="icon-btn" title="Settings (⌘,)" onClick={() => useStore.setState({ settingsPane: "general" })}>
+				<button
+					type="button"
+					className="icon-btn"
+					title="Settings (⌘,)"
+					onClick={() => useStore.setState({ settingsPane: "general" })}
+				>
 					<Settings size={16} />
 				</button>
 				<span className="spacer" />
-				<button type="button" className="btn small" onClick={() => void chooseFolderAndStart()}>
-					<FolderPlus size={13} /> Open folder
+				<button
+					type="button"
+					className="btn small"
+					onClick={() => showWorkspaceDashboard()}
+				>
+					<FolderPlus size={13} /> Workspace repos
 				</button>
 			</div>
 		</nav>

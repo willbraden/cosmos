@@ -7,6 +7,7 @@ import {
 	chatFromEntries,
 	collectFileChanges,
 	EMPTY_CHAT,
+	isHiddenUserPromptText,
 	lastAssistantText,
 	mergeReloadedChat,
 	noticeItem,
@@ -148,5 +149,19 @@ describe("edge cases", () => {
 		state = applyRecord(state, { type: "message_update", assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: '{"command":"l' } });
 		const block = state.items[0].kind === "assistant" ? state.items[0].blocks[0] : undefined;
 		expect(block).toMatchObject({ type: "toolCall", argsText: '{"command":"l', args: {}, complete: false });
+	});
+
+	it("filters internal MCP auth prompts from the chat model", () => {
+		let state = applyRecord(EMPTY_CHAT, {
+			type: "message_start",
+			message: { role: "user", content: "/desktop-mcp-auth figma", timestamp: 11 },
+		} as PiRecord);
+		state = applyRecord(state, {
+			type: "message_start",
+			message: { role: "user", content: "/mcp-auth figma", timestamp: 12 },
+		} as PiRecord);
+		expect(state.items).toEqual([]);
+		expect(isHiddenUserPromptText("/desktop-mcp-auth figma")).toBe(true);
+		expect(isHiddenUserPromptText("/mcp-auth figma")).toBe(true);
 	});
 });

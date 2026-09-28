@@ -1,8 +1,11 @@
 import type { MenuCommand } from "@shared/ipc";
+import { compareSessionSummaries } from "@shared/session-order";
 import { PanelLeftOpen } from "lucide-react";
 import { useEffect } from "react";
 import { ChangesPanel } from "./components/ChangesPanel";
 import { ChatView } from "./components/ChatView";
+import { DeveloperInspector } from "./components/DeveloperInspector";
+import { IconButtonTooltips } from "./components/IconButtonTooltips";
 import { NewSessionView } from "./components/NewSessionView";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
@@ -10,21 +13,21 @@ import { Toasts } from "./components/Toasts";
 import { api } from "./lib/api";
 import {
 	activateTab,
-	chooseFolderAndStart,
 	compact,
 	expireDialogs,
 	exportHtml,
 	openExistingSession,
+	showWorkspaceDashboard,
 	startNewSession,
 	stop,
 } from "./state/actions";
-import { activeTab, useStore } from "./state/store";
+import { activeTab, toast, useStore } from "./state/store";
 
-/** Sidebar order for ⌘⇧[ / ⌘⇧]: most recently modified sessions first. */
+/** Sidebar order for ⌘⇧[ / ⌘⇧]: keep stable creation order instead of recency. */
 function cycleSession(direction: 1 | -1): void {
 	const { sessions } = useStore.getState();
 	if (sessions.length === 0) return;
-	const ordered = [...sessions].sort((a, b) => b.modified - a.modified);
+	const ordered = [...sessions].sort(compareSessionSummaries);
 	const current = activeTab()?.sessionPath;
 	const index = ordered.findIndex((s) => s.path === current);
 	const next = ordered[(index + direction + ordered.length) % ordered.length];
@@ -37,20 +40,27 @@ function handleMenu(command: MenuCommand): void {
 		case "new-session":
 			return void startNewSession(tab?.cwd);
 		case "open-folder":
-			return void chooseFolderAndStart();
+			return showWorkspaceDashboard();
 		case "settings":
 			return useStore.setState({ settingsPane: "general" });
 		case "search": {
 			const { settings } = useStore.getState();
-			if (settings.sidebarCollapsed) void api.updateSettings({ sidebarCollapsed: false });
-			return useStore.setState((s) => ({ focusSearchTick: s.focusSearchTick + 1 }));
+			if (settings.sidebarCollapsed)
+				void api.updateSettings({ sidebarCollapsed: false });
+			return useStore.setState((s) => ({
+				focusSearchTick: s.focusSearchTick + 1,
+			}));
 		}
 		case "toggle-sidebar":
-			return void api.updateSettings({ sidebarCollapsed: !useStore.getState().settings.sidebarCollapsed });
+			return void api.updateSettings({
+				sidebarCollapsed: !useStore.getState().settings.sidebarCollapsed,
+			});
 		case "toggle-changes":
 			return useStore.setState((s) => ({ changesOpen: !s.changesOpen }));
 		case "focus-composer":
-			return useStore.setState((s) => ({ focusComposerTick: s.focusComposerTick + 1 }));
+			return useStore.setState((s) => ({
+				focusComposerTick: s.focusComposerTick + 1,
+			}));
 		case "stop":
 			if (tab) void stop(tab.tabId);
 			return;
@@ -64,11 +74,21 @@ function handleMenu(command: MenuCommand): void {
 			return cycleSession(1);
 		case "prev-session":
 			return cycleSession(-1);
+		case "reset-figma":
+			return void api
+				.resetFigmaAuth()
+				.then((result) => {
+					useStore.setState({ settingsPane: "mcps" });
+					toast(result.removed ? "info" : "warning", result.message);
+				})
+				.catch((error) => toast("error", error instanceof Error ? error.message : String(error)));
 	}
 }
 
 export function App() {
-	const tab = useStore((s) => (s.activeTabId ? s.tabs[s.activeTabId] : undefined));
+	const tab = useStore((s) =>
+		s.activeTabId ? s.tabs[s.activeTabId] : undefined,
+	);
 	const collapsed = useStore((s) => s.settings.sidebarCollapsed);
 	const settingsPane = useStore((s) => s.settingsPane);
 	const changesOpen = useStore((s) => s.changesOpen);
@@ -102,7 +122,9 @@ export function App() {
 			{tab ? <ChatView tab={tab} /> : <NewSessionView />}
 			{tab && changesOpen && <ChangesPanel tab={tab} />}
 			{settingsPane && <SettingsModal pane={settingsPane} />}
+			<DeveloperInspector />
 			<Toasts />
+			<IconButtonTooltips />
 		</div>
 	);
 }

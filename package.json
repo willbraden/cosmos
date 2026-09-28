@@ -10,7 +10,9 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "test:e2e": "node scripts/e2e-rpc.mjs",
-    "dist": "electron-vite build && electron-builder --mac"
+    "build:icon": "node scripts/compile-icon-composer.mjs",
+    "dist": "electron-vite build && electron-builder --mac",
+    "postinstall": "node scripts/apply-pi-copilot-namespace-hotfix.mjs"
   },
   "author": "Will Braden",
   "license": "MIT",
@@ -59,10 +61,15 @@
       {
         "from": "resources/pi-extension",
         "to": "pi-extension"
+      },
+      {
+        "from": "resources/cosmos-package",
+        "to": "cosmos-package"
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icon",
       "target": [
         {
           "target": "dmg",

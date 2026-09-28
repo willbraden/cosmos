@@ -9,7 +9,8 @@ import type {
 	ThinkingLevel,
 } from "@shared/pi-types";
 import { create } from "zustand";
-import { type ChatState, EMPTY_CHAT } from "./chat-model";
+import { summarizeSessionTitle } from "../lib/session-title";
+import { type ChatState, EMPTY_CHAT, isHiddenUserPromptText } from "./chat-model";
 
 export type DialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }> & {
 	receivedAt: number;
@@ -23,10 +24,12 @@ export interface Attachment {
 
 export interface TabState {
 	tabId: string;
+	openedAt: number;
 	cwd: string;
 	sessionPath?: string;
 	sessionId?: string;
 	name?: string;
+	autoTitle?: string;
 	status: "starting" | "ready" | "error";
 	/** The main process has a pi process registered for this tab. */
 	opened: boolean;
@@ -48,6 +51,7 @@ export interface TabState {
 	commands: SlashCommandInfo[];
 	draft: string;
 	attachments: Attachment[];
+	hiddenPrompts: string[];
 	unread: boolean;
 }
 
@@ -58,7 +62,7 @@ export interface Toast {
 	action?: { label: string; run(): void };
 }
 
-export type SettingsPane = "general" | "providers" | "about";
+export type SettingsPane = "general" | "providers" | "mcps" | "about";
 
 export interface AppStore {
 	appInfo?: AppInfo;
@@ -102,6 +106,7 @@ export const useStore = create<AppStore>(() => ({
 export function newTab(tabId: string, cwd: string, permissionMode: PermissionMode, sessionPath?: string): TabState {
 	return {
 		tabId,
+		openedAt: Date.now(),
 		cwd,
 		sessionPath,
 		status: "starting",
@@ -119,6 +124,7 @@ export function newTab(tabId: string, cwd: string, permissionMode: PermissionMod
 		commands: [],
 		draft: "",
 		attachments: [],
+		hiddenPrompts: [],
 		unread: false,
 	};
 }
@@ -150,9 +156,24 @@ export function dismissToast(id: number): void {
 	useStore.setState((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
 }
 
-/** Display title for a session: explicit name, else its first message. */
-export function sessionTitle(summary: { name?: string; firstMessage?: string } | undefined, fallback = "New session"): string {
-	const text = summary?.name?.trim() || summary?.firstMessage?.replace(/\s+/g, " ").trim();
+export function autoTitleFromFirstMessage(firstMessage: string | undefined): string {
+	if (!firstMessage || isHiddenUserPromptText(firstMessage)) return "";
+	return summarizeSessionTitle(firstMessage);
+}
+
+/** Display title for a session: explicit name, else a frozen auto-title from its first message. */
+export function sessionTitle(
+	summary: { name?: string; firstMessage?: string } | undefined,
+	fallback = "New session",
+	liveFirstMessage?: string,
+	frozenAutoTitle?: string,
+): string {
+	const explicit = summary?.name?.trim();
+	const text =
+		explicit ||
+		frozenAutoTitle ||
+		autoTitleFromFirstMessage(liveFirstMessage) ||
+		autoTitleFromFirstMessage(summary?.firstMessage);
 	if (!text) return fallback;
 	return text.length > 80 ? `${text.slice(0, 80)}…` : text;
 }

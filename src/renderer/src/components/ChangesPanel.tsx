@@ -21,7 +21,7 @@ function FileChanges({ path, changes, cwd }: { path: string; changes: FileChange
 	return (
 		<div className="change-file">
 			<div className="change-file-header">
-				<button type="button" className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setOpen(!open)} aria-expanded={open}>
+				<button type="button" className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setOpen(!open)} aria-expanded={open} aria-label={open ? "Collapse file changes" : "Expand file changes"}>
 					<ChevronRight size={13} className={`chev${open ? " open" : ""}`} style={{ transform: open ? "rotate(90deg)" : undefined }} />
 				</button>
 				<span className="path" title={path}>

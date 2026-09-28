@@ -30,6 +30,7 @@ export type ChatItem =
 			usage?: Usage;
 			timestamp: number;
 			streaming: boolean;
+			durationMs?: number;
 	  }
 	| {
 			kind: "bash";
@@ -62,6 +63,15 @@ export interface ChatState {
 }
 
 export const EMPTY_CHAT: ChatState = { items: [], tools: {} };
+
+export function isHiddenUserPromptText(text: string): boolean {
+	const trimmed = text.trim();
+	return trimmed.startsWith("/desktop-") || trimmed.startsWith("/mcp-auth ");
+}
+
+export function firstUserMessage(chat: ChatState): string | undefined {
+	return chat.items.find((item): item is Extract<ChatItem, { kind: "user" }> => item.kind === "user" && !isHiddenUserPromptText(item.text))?.text;
+}
 
 let noticeCounter = 0;
 export function noticeItem(level: "info" | "warning" | "error", text: string): ChatItem {
@@ -124,7 +134,10 @@ function assistantItem(message: AssistantMessage, entryId: string | undefined, s
 /** Convert one message into chat items and tool-state updates. */
 function applyMessage(state: ChatState, message: AgentMessage, entryId?: string): ChatState {
 	switch (message.role) {
-		case "user":
+		case "user": {
+			const text = contentText(message.content);
+			const images = contentImages(message.content);
+			if (images.length === 0 && isHiddenUserPromptText(text)) return state;
 			return {
 				...state,
 				items: [
@@ -133,12 +146,13 @@ function applyMessage(state: ChatState, message: AgentMessage, entryId?: string)
 						kind: "user",
 						key: messageKey(message),
 						entryId,
-						text: contentText(message.content),
-						images: contentImages(message.content),
+						text,
+						images,
 						timestamp: message.timestamp,
 					},
 				],
 			};
+		}
 		case "assistant":
 			return { ...state, items: [...state.items, assistantItem(message, entryId, false)] };
 		case "toolResult":

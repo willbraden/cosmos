@@ -1,11 +1,10 @@
 import { FileDiff, FolderOpen, GitFork, RotateCw, SquareTerminal, TriangleAlert } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { api, basename, formatCost, formatTokens, tildify } from "../lib/api";
-import { cloneSession, renameSession, retryTab } from "../state/actions";
-import { collectFileChanges } from "../state/chat-model";
+import { cloneSession, renameSession, retryTab, sendDraft, setDraft } from "../state/actions";
+import { collectFileChanges, firstUserMessage } from "../state/chat-model";
 import { sessionTitle, type TabState, useStore } from "../state/store";
 import { Composer } from "./Composer";
-import { CosmosMark } from "./CosmosMark";
 import { DialogCard } from "./DialogCard";
 import { useDismiss } from "./Pickers";
 import { Transcript } from "./Transcript";
@@ -82,7 +81,7 @@ function Title({ tab }: { tab: TabState }) {
 	const summary = useStore((s) => s.sessions.find((x) => x.path === tab.sessionPath));
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
-	const title = sessionTitle(tab.name ? { name: tab.name } : summary, "New session");
+	const title = sessionTitle(tab.name ? { name: tab.name } : summary, "New session", firstUserMessage(tab.chat), tab.autoTitle);
 	if (editing) {
 		return (
 			<input
@@ -153,15 +152,38 @@ export function ChatHeader({ tab, scrolled }: { tab: TabState; scrolled: boolean
 function Welcome({ tab }: { tab: TabState }) {
 	const providers = useStore((s) => s.providers);
 	const models = useStore((s) => s.models);
-	const home = useStore((s) => s.appInfo?.homeDir);
 	const noProvider = tab.status === "ready" && models.length === 0 && !providers.some((p) => p.configured);
+	const starters = [
+		{
+			label: "Plan a feature",
+			prompt: "Help me plan a feature for this app. Ask a few clarifying questions, then propose an approach.",
+		},
+		{
+			label: "Build something",
+			prompt: "Help me implement a change in this project. Start by asking what I want to build.",
+		},
+		{
+			label: "Fix an issue",
+			prompt: "Help me debug an issue in this project. Ask what's broken, then guide me to a fix.",
+		},
+	];
+	const startWithPrompt = (prompt: string) => {
+		setDraft(tab.tabId, prompt);
+		void sendDraft(tab.tabId);
+	};
 	return (
-		<div className="empty">
-			<div className="app-logo">
-				<CosmosMark size={38} />
+		<div className="empty empty-cosmos empty-chat-welcome">
+			<h1 className="cosmos-wordmark cosmos-wordmark-hero" aria-label="cosmos">
+				<span className="cosmos-wordmark-light">cosm</span>
+				<span className="cosmos-wordmark-strong">os</span>
+			</h1>
+			<div className="empty-chat-actions" role="group" aria-label="Suggested ways to start">
+				{starters.map((starter) => (
+					<button key={starter.label} type="button" className="empty-chat-action" onClick={() => startWithPrompt(starter.prompt)}>
+						{starter.label}
+					</button>
+				))}
 			</div>
-			<h1>What should we build in {basename(tab.cwd)}?</h1>
-			<div className="muted small-text">{tildify(tab.cwd, home)}</div>
 			{noProvider && (
 				<div className="welcome-card">
 					<TriangleAlert size={18} style={{ color: "var(--warning)", flexShrink: 0, marginTop: 2 }} />
