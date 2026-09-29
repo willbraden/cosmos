@@ -26,6 +26,7 @@ import {
 	removePersonalMcpServer,
 	upsertPersonalMcpServer,
 } from "../src/main/mcp-config";
+import { extractReportedActiveTools } from "../src/main/mcp-session-availability";
 import { encodeJsonl, JsonlDecoder } from "../src/main/pi/jsonl";
 import { sanitizeSettingsPatch } from "../src/main/settings";
 import { parseEnvOutput } from "../src/main/shell-env";
@@ -282,6 +283,23 @@ describe("mcp config helpers", () => {
 		removePersonalMcpServer(glayvinHome, "test-server");
 		overview = await getMcpOverview(glayvinHome, join(glayvinHome, ".pi", "agent"));
 		expect(overview.servers.find((server) => server.name === "test-server")).toBeUndefined();
+	});
+});
+
+describe("mcp session availability", () => {
+	it("extracts reported active tools from a hidden custom message", () => {
+		expect(
+			extractReportedActiveTools([
+				{
+					type: "custom_message",
+					id: "1",
+					parentId: null,
+					timestamp: "",
+					customType: "desktop-active-tools",
+					details: { tools: ["read", "get_screenshot"] },
+				},
+			] as never),
+		).toEqual(["read", "get_screenshot"]);
 	});
 });
 

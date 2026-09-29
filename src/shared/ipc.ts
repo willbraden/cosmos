@@ -1,7 +1,7 @@
 // Contract shared by the main process, preload bridge, and renderer.
 // Pi protocol records are passed through as plain JSON (see pi-types.ts).
 
-import type { PiRecord } from "./pi-types";
+import type { ExtensionUiRequest, PiRecord } from "./pi-types";
 
 export type PermissionMode = "ask" | "acceptEdits" | "auto";
 export type ThemePreference = "system" | "light" | "dark";
@@ -109,6 +109,8 @@ export interface McpServerDefinition {
 	tools: string[];
 	oauthConnected?: boolean;
 	oauthTokensPath?: string;
+	sessionAvailable?: boolean;
+	sessionAvailabilityMessage?: string;
 	config: Record<string, unknown>;
 }
 
@@ -171,6 +173,34 @@ export interface SessionExit {
 	/** "suspended" exits are deliberate; the process restarts transparently on the next command. */
 	reason: "suspended" | "crashed" | "closed";
 	message?: string;
+}
+
+export type LiveDialogRequest = Extract<
+	ExtensionUiRequest,
+	{ method: "select" | "confirm" | "input" | "editor" }
+>;
+
+export interface SessionWidgetState {
+	lines: string[];
+	placement: "aboveEditor" | "belowEditor";
+}
+
+export interface LiveSessionSnapshot {
+	tabId: string;
+	openedAt: number;
+	cwd: string;
+	sessionPath?: string;
+	permissionMode: PermissionMode;
+	isStreaming: boolean;
+	isCompacting: boolean;
+	dialogs: LiveDialogRequest[];
+	statuses: Record<string, string>;
+	widgets: Record<string, SessionWidgetState>;
+}
+
+export interface LiveSessionState {
+	visibleTabId: string | null;
+	tabs: LiveSessionSnapshot[];
 }
 
 // ---- Authentication -------------------------------------------------------
@@ -263,6 +293,7 @@ export interface DesktopApi {
 	): Promise<SessionMenuAction | null>;
 
 	openSession(request: OpenSessionRequest): Promise<void>;
+	getLiveSessions(): Promise<LiveSessionState>;
 	sendCommand<T = unknown>(tabId: string, command: PiCommand): Promise<T>;
 	respondToUi(tabId: string, response: Record<string, unknown>): Promise<void>;
 	closeSession(tabId: string): Promise<void>;

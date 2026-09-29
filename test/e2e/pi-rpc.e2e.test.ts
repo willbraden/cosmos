@@ -167,7 +167,12 @@ describe("pi RPC through the desktop launcher", () => {
 		const deniedEvents = collect(denied);
 		try {
 			await denied.request({ type: "prompt", message: "run bash please" });
-			const request = (await deniedEvents.next((r) => r.type === "extension_ui_request" && "title" in r)) as { id: string };
+			const request = (await deniedEvents.next(
+				(r) =>
+					r.type === "extension_ui_request" &&
+					"title" in r &&
+					r.title.startsWith(PERMISSION_PROMPT_MARKER),
+			)) as { id: string };
 			denied.send({ type: "extension_ui_response", id: request.id, value: PERMISSION_OPTIONS.deny });
 			const end = (await deniedEvents.next((r) => r.type === "tool_execution_end")) as Extract<PiRecord, { type: "tool_execution_end" }>;
 			expect(end.isError).toBe(true);
@@ -183,7 +188,14 @@ describe("pi RPC through the desktop launcher", () => {
 			const end = (await editEvents.next((r) => r.type === "tool_execution_end")) as Extract<PiRecord, { type: "tool_execution_end" }>;
 			expect(end.isError).toBe(false);
 			expect((end.result.details as { patch?: string }).patch).toContain("+Howdy");
-			expect(editEvents.records.some((r) => r.type === "extension_ui_request" && "title" in r)).toBe(false);
+			expect(
+				editEvents.records.some(
+					(r) =>
+						r.type === "extension_ui_request" &&
+						"title" in r &&
+						r.title.startsWith(PERMISSION_PROMPT_MARKER),
+				),
+			).toBe(false);
 			await editEvents.next((r) => r.type === "agent_settled");
 		} finally {
 			await edits.stop();
@@ -199,7 +211,14 @@ describe("pi RPC through the desktop launcher", () => {
 			expect(before.messages).toHaveLength(0);
 			await proc.request({ type: "prompt", message: "run bash please" });
 			await events.next((r) => r.type === "agent_settled");
-			expect(events.records.some((r) => r.type === "extension_ui_request" && "title" in r)).toBe(false);
+			expect(
+				events.records.some(
+					(r) =>
+						r.type === "extension_ui_request" &&
+						"title" in r &&
+						r.title.startsWith(PERMISSION_PROMPT_MARKER),
+				),
+			).toBe(false);
 			const end = events.records.find((r) => r.type === "tool_execution_end") as Extract<PiRecord, { type: "tool_execution_end" }>;
 			expect(end.isError).toBe(false);
 		} finally {

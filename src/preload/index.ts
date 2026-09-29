@@ -37,6 +37,7 @@ const api: DesktopApi = {
 		ipcRenderer.invoke("sessions:context-menu", path, pinned),
 
 	openSession: (request) => ipcRenderer.invoke("session:open", request),
+	getLiveSessions: () => ipcRenderer.invoke("session:live-state"),
 	sendCommand: (tabId, command) =>
 		ipcRenderer.invoke("session:command", tabId, command),
 	respondToUi: (tabId, response) =>

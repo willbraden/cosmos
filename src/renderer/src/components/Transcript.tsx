@@ -29,6 +29,7 @@ import { isHiddenUserPromptText, type Block, type ChatItem, type ChatState } fro
 import type { TabState } from "../state/store";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { CopyButton, Markdown } from "./Markdown";
+import { SpinnerIcon } from "./SpinnerIcon";
 import { ToolCard } from "./ToolCard";
 
 function ReasoningNote({
@@ -54,6 +55,11 @@ function ReasoningNote({
 }
 
 type ReasoningBlock = Exclude<Block, { type: "text" }>;
+type AssistantTranscriptItem = Extract<ChatItem, { kind: "assistant" }>;
+type NonAssistantItem = Exclude<ChatItem, { kind: "assistant" }>;
+type TranscriptRow =
+	| { key: string; kind: "assistantTurn"; items: AssistantTranscriptItem[] }
+	| { key: string; kind: "item"; item: NonAssistantItem };
 
 function hasActiveReasoningWork(
 	blocks: ReasoningBlock[],
@@ -82,6 +88,7 @@ function ReasoningFold({
 	waitingToolIds,
 	live,
 	runStartedAt,
+	showActiveStatus = true,
 }: {
 	blocks: ReasoningBlock[];
 	tools: ChatState["tools"];
@@ -90,6 +97,7 @@ function ReasoningFold({
 	waitingToolIds: Set<string>;
 	live: boolean;
 	runStartedAt?: number;
+	showActiveStatus?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const [, force] = useState(0);
@@ -110,7 +118,10 @@ function ReasoningFold({
 			!settled &&
 			(!tools[block.id] || tools[block.id]?.status === "running"),
 	);
-	const active = live && hasActiveReasoningWork(blocks, tools, waitingToolIds, settled);
+	const active =
+		showActiveStatus &&
+		live &&
+		hasActiveReasoningWork(blocks, tools, waitingToolIds, settled);
 	const seconds =
 		active && runStartedAt ? Math.floor((Date.now() - runStartedAt) / 1000) : 0;
 	return (
@@ -129,7 +140,7 @@ function ReasoningFold({
 						{waiting && !active ? (
 							<span style={{ color: "var(--warning)" }}>Needs approval</span>
 						) : null}
-						{running && !active ? <span className="spinner" /> : null}
+						{running && !active ? <SpinnerIcon size={14} /> : null}
 						{steps > 1 ? <span>{steps} steps</span> : null}
 					</span>
 				</span>
@@ -139,11 +150,7 @@ function ReasoningFold({
 							<span style={{ color: "var(--warning)" }}>Needs approval</span>
 						) : (
 							<>
-								<span className="dots inline">
-									<span />
-									<span />
-									<span />
-								</span>
+								<SpinnerIcon size={14} />
 								<span>Working{seconds > 2 ? ` · ${seconds}s` : ""}</span>
 							</>
 						)}
@@ -269,33 +276,36 @@ function formatThoughtDuration(durationMs: number | undefined): string | null {
 		: `Thought for ${minutes}m`;
 }
 
-const AssistantMessage = memo(function AssistantMessage({
+function assistantText(item: AssistantTranscriptItem): string {
+	return item.blocks
+		.filter((block) => block.type === "text")
+		.map((block) => block.text)
+		.join("\n\n")
+		.trim();
+}
+
+function assistantDetailBlocks(item: AssistantTranscriptItem): ReasoningBlock[] {
+	return item.blocks.filter(
+		(block): block is ReasoningBlock => block.type !== "text",
+	);
+}
+
+function AssistantStepDetails({
 	item,
 	tools,
 	cwd,
 	waitingToolIds,
 	runStartedAt,
-	showFooter,
 }: {
-	item: Extract<ChatItem, { kind: "assistant" }>;
+	item: AssistantTranscriptItem;
 	tools: ChatState["tools"];
 	cwd: string;
 	waitingToolIds: Set<string>;
 	runStartedAt?: number;
-	showFooter: boolean;
 }) {
-	const text = item.blocks
-		.filter((b) => b.type === "text")
-		.map((b) => (b as { text: string }).text)
-		.join("\n\n")
-		.trim();
-	const failed =
-		item.stopReason === "error" ||
-		(item.stopReason === "aborted" && item.errorMessage);
 	const groups = useMemo(() => groupDetailBlocks(item.blocks), [item.blocks]);
-	const durationLabel = formatThoughtDuration(item.durationMs);
 	return (
-		<div className="assistant-msg">
+		<>
 			{groups.map((group) => {
 				if (group.kind === "text")
 					return <Markdown key={group.key} text={group.text} />;
@@ -309,21 +319,128 @@ const AssistantMessage = memo(function AssistantMessage({
 						waitingToolIds={waitingToolIds}
 						live={item.streaming && group.live}
 						runStartedAt={runStartedAt}
+						showActiveStatus={false}
 					/>
 				);
 			})}
-			{failed && (
-				<div className="error-card">
-					<strong>{item.stopReason === "aborted" ? "Stopped" : "Error"}:</strong>{" "}
-					{item.errorMessage ?? "The request failed."}
+		</>
+	);
+}
+
+const AssistantTurn = memo(function AssistantTurn({
+	items,
+	tools,
+	cwd,
+	waitingToolIds,
+	runStartedAt,
+	showFooter,
+	turnActive,
+}: {
+	items: AssistantTranscriptItem[];
+	tools: ChatState["tools"];
+	cwd: string;
+	waitingToolIds: Set<string>;
+	runStartedAt?: number;
+	showFooter: boolean;
+	turnActive: boolean;
+}) {
+	const finalItem = items[items.length - 1];
+	const text = assistantText(finalItem);
+	const failed =
+		finalItem.stopReason === "error" ||
+		(finalItem.stopReason === "aborted" && finalItem.errorMessage);
+	const durationLabel = formatThoughtDuration(finalItem.durationMs);
+	const detailItems = items.filter((item) => assistantDetailBlocks(item).length > 0);
+	const latestDetailItem = [...detailItems].reverse().find(Boolean);
+	const latestDetailBlocks = latestDetailItem
+		? assistantDetailBlocks(latestDetailItem)
+		: [];
+	const detailLabel = latestDetailItem
+		? summarizeReasoning(
+				latestDetailBlocks,
+				tools,
+				waitingToolIds,
+				turnActive ? false : !latestDetailItem.streaming,
+			)
+		: null;
+	const totalSteps = detailItems.reduce(
+		(total, item) => total + reasoningStepCount(assistantDetailBlocks(item)),
+		0,
+	);
+	const waiting = latestDetailBlocks.some(
+		(block) => block.type === "toolCall" && waitingToolIds.has(block.id),
+	);
+	const active =
+		turnActive &&
+		!!latestDetailItem &&
+		hasActiveReasoningWork(latestDetailBlocks, tools, waitingToolIds, false);
+	const [open, setOpen] = useState(false);
+	const [, force] = useState(0);
+	useEffect(() => {
+		if (!active) return;
+		const timer = setInterval(() => force((n) => n + 1), 1000);
+		return () => clearInterval(timer);
+	}, [active]);
+	const seconds =
+		active && runStartedAt ? Math.floor((Date.now() - runStartedAt) / 1000) : 0;
+
+	return (
+		<div className="assistant-msg">
+			{detailLabel && (
+				<div className="fold reasoning-fold assistant-turn-fold">
+					<button
+						type="button"
+						className={`fold-header assistant-turn-header${active ? " is-live shimmer" : ""}`}
+						onClick={() => setOpen(!open)}
+						aria-expanded={open}
+					>
+						<ChevronRight
+							size={14}
+							className={`chev${open ? " open" : ""}`}
+						/>
+						{active && !waiting ? <SpinnerIcon size={16} /> : <Brain size={14} />}
+						<span className="label">{detailLabel}</span>
+						<span className="tail">
+							{waiting ? (
+								<span style={{ color: "var(--warning)" }}>Needs approval</span>
+							) : active ? (
+								<span>{seconds > 2 ? `${seconds}s` : "Working"}</span>
+							) : null}
+							{totalSteps > 1 ? <span>{totalSteps} steps</span> : null}
+						</span>
+					</button>
+					{open && (
+						<div className="reasoning-body assistant-turn-body">
+							{detailItems.map((item) => (
+								<div key={item.key} className="assistant-turn-step">
+									<AssistantStepDetails
+										item={item}
+										tools={tools}
+										cwd={cwd}
+										waitingToolIds={waitingToolIds}
+										runStartedAt={runStartedAt}
+									/>
+								</div>
+							))}
+						</div>
+					)}
 				</div>
 			)}
-			{item.stopReason === "aborted" && !item.errorMessage && (
+			{text && <Markdown text={text} />}
+			{failed && (
+				<div className="error-card">
+					<strong>
+						{finalItem.stopReason === "aborted" ? "Stopped" : "Error"}:
+					</strong>{" "}
+					{finalItem.errorMessage ?? "The request failed."}
+				</div>
+			)}
+			{finalItem.stopReason === "aborted" && !finalItem.errorMessage && (
 				<div className="muted small-text">Stopped</div>
 			)}
 			{showFooter &&
-				!item.streaming &&
-				item.stopReason !== "toolUse" &&
+				!finalItem.streaming &&
+				finalItem.stopReason !== "toolUse" &&
 				(text || durationLabel) && (
 					<div className="assistant-footer">
 						{durationLabel && <span>{durationLabel}</span>}
@@ -392,28 +509,11 @@ function SummaryCard({ title, summary }: { title: string; summary: string }) {
 	);
 }
 
-function renderItem(
-	item: ChatItem,
-	tab: TabState,
-	waiting: Set<string>,
-	latestAssistantKey?: string,
-) {
+function renderStandaloneItem(item: NonAssistantItem, tab: TabState) {
 	switch (item.kind) {
 		case "user":
-			if (isHiddenUserPromptText(item.text)) return null;
 			return (
 				<UserMessage item={item} tabId={tab.tabId} canFork={!tab.isStreaming} />
-			);
-		case "assistant":
-			return (
-				<AssistantMessage
-					item={item}
-					tools={tab.chat.tools}
-					cwd={tab.cwd}
-					waitingToolIds={waiting}
-					runStartedAt={tab.runStartedAt}
-					showFooter={item.key === latestAssistantKey}
-				/>
 			);
 		case "bash":
 			return <BashItem item={item} />;
@@ -446,27 +546,73 @@ function renderItem(
 	}
 }
 
+function groupTranscriptRows(items: ChatItem[]): TranscriptRow[] {
+	const rows: TranscriptRow[] = [];
+	let bufferedAssistants: AssistantTranscriptItem[] = [];
+	const flushAssistants = () => {
+		if (bufferedAssistants.length === 0) return;
+		rows.push({
+			key: bufferedAssistants[0].key,
+			kind: "assistantTurn",
+			items: bufferedAssistants,
+		});
+		bufferedAssistants = [];
+	};
+	for (const item of items) {
+		if (item.kind === "assistant") {
+			bufferedAssistants.push(item);
+			continue;
+		}
+		flushAssistants();
+		if (item.kind === "user" && isHiddenUserPromptText(item.text)) continue;
+		rows.push({ key: item.key, kind: "item", item });
+	}
+	flushAssistants();
+	return rows;
+}
+
+function renderRow(
+	row: TranscriptRow,
+	tab: TabState,
+	waiting: Set<string>,
+	latestAssistantTurnKey?: string,
+) {
+	if (row.kind === "assistantTurn") {
+		return (
+			<AssistantTurn
+				items={row.items}
+				tools={tab.chat.tools}
+				cwd={tab.cwd}
+				waitingToolIds={waiting}
+				runStartedAt={tab.runStartedAt}
+				showFooter={row.key === latestAssistantTurnKey}
+				turnActive={row.key === latestAssistantTurnKey && tab.isStreaming}
+			/>
+		);
+	}
+	return renderStandaloneItem(row.item, tab);
+}
+
 function hasInlineActiveIndicator(
+	rows: TranscriptRow[],
 	tab: TabState,
 	waitingToolIds: Set<string>,
 ): boolean {
-	for (let index = tab.chat.items.length - 1; index >= 0; index--) {
-		const item = tab.chat.items[index];
-		if (item.kind === "assistant") {
-			if (!item.streaming) return false;
-			return groupDetailBlocks(item.blocks).some(
-				(group) =>
-					group.kind === "detail" &&
-					group.live &&
-					hasActiveReasoningWork(
-						group.blocks,
-						tab.chat.tools,
-						waitingToolIds,
-						false,
-					),
+	for (let index = rows.length - 1; index >= 0; index--) {
+		const row = rows[index];
+		if (row.kind === "assistantTurn") {
+			const latestDetailItem = [...row.items]
+				.reverse()
+				.find((item) => assistantDetailBlocks(item).length > 0);
+			if (!latestDetailItem?.streaming) return false;
+			return hasActiveReasoningWork(
+				assistantDetailBlocks(latestDetailItem),
+				tab.chat.tools,
+				waitingToolIds,
+				false,
 			);
 		}
-		if (item.kind === "bash") return item.running;
+		if (row.item.kind === "bash") return row.item.running;
 	}
 	return false;
 }
@@ -499,11 +645,7 @@ function WorkingIndicator({
 	}
 	return (
 		<div className="working">
-			<span className="dots">
-				<span />
-				<span />
-				<span />
-			</span>
+			<SpinnerIcon size={14} />
 			{label}
 			{seconds > 2 && !tab.retry ? ` · ${seconds}s` : ""}
 		</div>
@@ -554,21 +696,19 @@ export function Transcript({
 		onScrolled(el.scrollTop > 4);
 	};
 
+	const rows = useMemo(() => groupTranscriptRows(tab.chat.items), [tab.chat.items]);
 	const busy = tab.isStreaming || tab.isCompacting;
-	const showBottomWorkingIndicator = !hasInlineActiveIndicator(tab, waiting);
-	const latestAssistantKey = [...tab.chat.items]
+	const showBottomWorkingIndicator = !hasInlineActiveIndicator(rows, tab, waiting);
+	const latestAssistantTurnKey = [...rows]
 		.reverse()
-		.find(
-			(item): item is Extract<ChatItem, { kind: "assistant" }> =>
-				item.kind === "assistant",
-		)?.key;
+		.find((row): row is Extract<TranscriptRow, { kind: "assistantTurn" }> => row.kind === "assistantTurn")?.key;
 	return (
 		<>
 			<div className="transcript" ref={scroller} onScroll={onScroll}>
 				<div className="transcript-inner">
-					{tab.chat.items.map((item) => (
-						<ErrorBoundary key={item.key} inline>
-							{renderItem(item, tab, waiting, latestAssistantKey)}
+					{rows.map((row) => (
+						<ErrorBoundary key={row.key} inline>
+							{renderRow(row, tab, waiting, latestAssistantTurnKey)}
 						</ErrorBoundary>
 					))}
 					{busy && showBottomWorkingIndicator && (

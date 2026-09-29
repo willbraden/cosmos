@@ -103,10 +103,16 @@ export const useStore = create<AppStore>(() => ({
 	focusSearchTick: 0,
 }));
 
-export function newTab(tabId: string, cwd: string, permissionMode: PermissionMode, sessionPath?: string): TabState {
+export function newTab(
+	tabId: string,
+	cwd: string,
+	permissionMode: PermissionMode,
+	sessionPath?: string,
+	openedAt = Date.now(),
+): TabState {
 	return {
 		tabId,
-		openedAt: Date.now(),
+		openedAt,
 		cwd,
 		sessionPath,
 		status: "starting",
@@ -165,14 +171,13 @@ export function autoTitleFromFirstMessage(firstMessage: string | undefined): str
 export function sessionTitle(
 	summary: { name?: string; firstMessage?: string } | undefined,
 	fallback = "New session",
-	liveFirstMessage?: string,
+	_liveFirstMessage?: string,
 	frozenAutoTitle?: string,
 ): string {
 	const explicit = summary?.name?.trim();
 	const text =
 		explicit ||
 		frozenAutoTitle ||
-		autoTitleFromFirstMessage(liveFirstMessage) ||
 		autoTitleFromFirstMessage(summary?.firstMessage);
 	if (!text) return fallback;
 	return text.length > 80 ? `${text.slice(0, 80)}…` : text;

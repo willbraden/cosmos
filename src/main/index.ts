@@ -52,6 +52,7 @@ import {
 	importXcodeFigmaAuthToPi,
 	resetFigmaAuth,
 } from "./figma-xcode-auth";
+import { probeFreshSessionActiveTools } from "./mcp-session-availability";
 import {
 	bridgeExtensionPath,
 	childNodePath,
@@ -65,8 +66,9 @@ import {
 	resolveGlayvinHomePath,
 	type RuntimePaths,
 } from "./glayvin-runtime";
-import { SessionHost } from "./pi/session-host";
 import { SessionIndex } from "./session-index";
+import { type SupervisorConfig } from "./session-supervisor-protocol";
+import { SessionSupervisorClient } from "./session-supervisor-client";
 import { SettingsStore } from "./settings";
 import { resolveShellEnv } from "./shell-env";
 import { inspectWorkspace, isPathInsideWorkspace } from "./workspace";
@@ -98,7 +100,7 @@ if (app.requestSingleInstanceLock()) {
 
 let settings: SettingsStore;
 let sessions: SessionIndex;
-let host: SessionHost;
+let host: SessionSupervisorClient;
 let auth: AuthService;
 
 function send(channel: string, payload?: unknown): void {
@@ -116,6 +118,115 @@ function refreshAppMenu(): void {
 
 function resolveWorkspaceRootPath(settingsValue: DesktopSettings): string {
 	return settingsValue.workspaceRootPath || join(homedir(), "Cosmos");
+}
+
+function sessionSupervisorSocketPath(): string {
+	return join(app.getPath("userData"), "session-supervisor.sock");
+}
+
+function buildSupervisorConfig(
+	settingsValue: DesktopSettings,
+	workspaceRoot: string,
+): SupervisorConfig {
+	const resolved = resolvePiCliPath(settingsValue.piCliPath);
+	if (!resolved.bundled) log.info(`Using custom pi CLI at ${resolved.path}`);
+	else if (settingsValue.piCliPath)
+		log.warn(
+			`Custom pi CLI not found (${settingsValue.piCliPath}); using bundled pi`,
+		);
+	return {
+		nodePath: childNodePath(),
+		launcherPath: launcherPath(),
+		extensionPath: bridgeExtensionPath(),
+		cliPath: resolved.path,
+		workspaceRoot,
+		idleSuspendMinutes: settingsValue.idleSuspendMinutes,
+		agentDir: process.env.PI_CODING_AGENT_DIR,
+		glayvinHome: process.env.GLAYVIN_HOME,
+	};
+}
+
+const FIGMA_TOOL_NAMES = new Set([
+	"get_design_context",
+	"get_screenshot",
+	"use_figma",
+	"search_design_system",
+	"get_libraries",
+	"get_metadata",
+	"create_new_file",
+	"whoami",
+]);
+
+async function annotateMcpSessionAvailability(
+	overview: Awaited<ReturnType<typeof getMcpOverview>>,
+): Promise<Awaited<ReturnType<typeof getMcpOverview>>> {
+	const figma = overview.servers.find(
+		(server) =>
+			server.name === "figma" &&
+			server.active &&
+			server.auth === "oauth" &&
+			server.oauthConnected,
+	);
+	if (!figma) return overview;
+	try {
+		const cwd = existsSync(resolveWorkspaceRootPath(settings.get()))
+			? resolveWorkspaceRootPath(settings.get())
+			: homedir();
+		const tools = await probeFreshSessionActiveTools({
+			nodePath: childNodePath(),
+			launcherPath: launcherPath(),
+			cliPath: resolvePiCliPath(settings.get().piCliPath).path,
+			extensionPath: bridgeExtensionPath(),
+			cwd,
+			env: {
+				...(await resolveShellEnv()),
+				...(process.env.PI_CODING_AGENT_DIR
+					? { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR }
+					: {}),
+				...(process.env.GLAYVIN_HOME ? { GLAYVIN_HOME: process.env.GLAYVIN_HOME } : {}),
+				ELECTRON_RUN_AS_NODE: "1",
+				PI_DESKTOP: "1",
+				COSMOS_DESKTOP: "1",
+				COSMOS_WORKSPACE_ROOT: resolveWorkspaceRootPath(settings.get()),
+				COSMOS_SESSION_CWD: cwd,
+				PI_DESKTOP_PERMISSION_MODE: settings.get().permissionMode,
+			},
+		});
+		const expected = figma.tools.filter((name) => name !== "*");
+		const matches = tools.some((name) =>
+			expected.length > 0 ? expected.includes(name) : FIGMA_TOOL_NAMES.has(name),
+		);
+		return {
+			...overview,
+			servers: overview.servers.map((server) =>
+				server.name === figma.name
+					? {
+						...server,
+						sessionAvailable: matches,
+						sessionAvailabilityMessage: matches
+							? "Fresh sessions can see the Figma tools."
+							: "Cosmos found the Figma sign-in, but a fresh Pi session still did not load the Figma tools.",
+					}
+					: server,
+			),
+		};
+	} catch (error) {
+		return {
+			...overview,
+			servers: overview.servers.map((server) =>
+				server.name === figma.name
+					? {
+						...server,
+						sessionAvailable: false,
+						sessionAvailabilityMessage:
+							error instanceof Error
+								? `Cosmos could not verify Figma in a fresh session: ${error.message}`
+								: "Cosmos could not verify Figma in a fresh session.",
+					}
+					: server,
+			),
+		};
+	}
 }
 
 function resolveRuntimePaths(paths: RuntimePaths): {
@@ -232,14 +343,18 @@ async function start(): Promise<void> {
 		if (runtimePathsChanged) {
 			applyRuntimeEnv(nextRuntimePaths);
 			sessions?.restart();
-			host?.restartForNewCredentials();
 			send("auth:changed");
 			runtimePaths = nextRuntimePaths;
 		}
-		if (workspaceRootChanged) {
-			workspaceRoot = nextWorkspaceRoot;
-			host?.restartForNewCredentials();
-		}
+		if (workspaceRootChanged) workspaceRoot = nextWorkspaceRoot;
+		const nextConfig = buildSupervisorConfig(next, workspaceRoot);
+		void host
+			?.configure(nextConfig)
+			.then(() => {
+				if (runtimePathsChanged || workspaceRootChanged)
+					return host.restartForNewCredentials();
+			})
+			.catch((error) => log.error("Could not reconfigure session supervisor", error));
 	});
 
 	// Resolve the login-shell environment early; the first session waits on it anyway.
@@ -248,37 +363,23 @@ async function start(): Promise<void> {
 	sessions = new SessionIndex(() => send("sessions:changed"));
 	sessions.start();
 
-	host = new SessionHost(
-		{
-			nodePath: childNodePath(),
-			launcherPath: launcherPath(),
-			extensionPath: bridgeExtensionPath(),
-			cliPath: () => {
-				const resolved = resolvePiCliPath(settings.get().piCliPath);
-				if (!resolved.bundled) log.info(`Using custom pi CLI at ${resolved.path}`);
-				else if (settings.get().piCliPath)
-					log.warn(
-						`Custom pi CLI not found (${settings.get().piCliPath}); using bundled pi`,
-					);
-				return resolved.path;
-			},
-			env: resolveShellEnv,
-			workspaceRoot: () => workspaceRoot,
-			idleSuspendMinutes: () => settings.get().idleSuspendMinutes,
-		},
-		{
+	host = new SessionSupervisorClient({
+		socketPath: sessionSupervisorSocketPath(),
+		nodePath: childNodePath(),
+		sink: {
 			events: (batches) => {
 				for (const batch of batches) send("session:events", batch);
 			},
 			exit: (exit) => send("session:exit", exit),
 		},
-	);
+	});
+	await host.start(buildSupervisorConfig(settings.get(), workspaceRoot));
 
 	auth = new AuthService({
 		event: (event) => send("auth:event", event),
 		prompt: (prompt) => send("auth:prompt", prompt),
 		credentialsChanged: () => {
-			host.restartForNewCredentials();
+			void host.restartForNewCredentials();
 			send("auth:changed");
 		},
 	});
@@ -448,7 +549,8 @@ function registerIpc(): void {
 	);
 	ipcMain.handle("mcp:overview", async () => {
 		const agentDir = getAgentDir();
-		return getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir);
+		const overview = await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir);
+		return annotateMcpSessionAvailability(overview);
 	});
 	ipcMain.handle("figma:xcode-status", async () =>
 		getFigmaXcodeAuthStatus(getAgentDir()),
@@ -458,12 +560,12 @@ function registerIpc(): void {
 	);
 	ipcMain.handle("figma:xcode-import-auth", async () => {
 		const result = await importXcodeFigmaAuthToPi(getAgentDir());
-		host.restartForNewCredentials();
+		await host.restartForNewCredentials();
 		return result;
 	});
 	ipcMain.handle("figma:reset-auth", async () => {
 		const result = await resetFigmaAuth(getAgentDir());
-		host.restartForNewCredentials();
+		await host.restartForNewCredentials();
 		return result;
 	});
 	ipcMain.handle("mcp:upsert-personal", async (_e, name: unknown, config: unknown) => {
@@ -473,8 +575,10 @@ function registerIpc(): void {
 			String(name ?? ""),
 			config,
 		);
-		host.restartForNewCredentials();
-		return getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir);
+		await host.restartForNewCredentials();
+		return annotateMcpSessionAvailability(
+			await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir),
+		);
 	});
 	ipcMain.handle("mcp:remove-personal", async (_e, name: unknown) => {
 		const agentDir = getAgentDir();
@@ -482,8 +586,10 @@ function registerIpc(): void {
 			resolveCurrentGlayvinHome(agentDir),
 			String(name ?? ""),
 		);
-		host.restartForNewCredentials();
-		return getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir);
+		await host.restartForNewCredentials();
+		return annotateMcpSessionAvailability(
+			await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir),
+		);
 	});
 
 	ipcMain.handle("sessions:list", () => sessions.list());
@@ -544,6 +650,7 @@ function registerIpc(): void {
 		});
 		settings.addRecentProject(cwd);
 	});
+	ipcMain.handle("session:live-state", () => host.getSnapshot());
 	ipcMain.handle("session:command", (_e, tabId: unknown, command: unknown) => {
 		const cmd = command as { type?: unknown };
 		if (!cmd || typeof cmd !== "object" || typeof cmd.type !== "string")
@@ -552,10 +659,10 @@ function registerIpc(): void {
 	});
 	ipcMain.handle(
 		"session:ui-response",
-		(_e, tabId: unknown, response: unknown) => {
+		async (_e, tabId: unknown, response: unknown) => {
 			if (!response || typeof response !== "object")
 				throw new Error("Invalid UI response");
-			host.respondToUi(String(tabId), response as Record<string, unknown>);
+			await host.respondToUi(String(tabId), response as Record<string, unknown>);
 		},
 	);
 	ipcMain.handle("session:close", (_e, tabId: unknown) =>
@@ -744,21 +851,11 @@ app.on("window-all-closed", () => {
 });
 
 let quitting = false;
-app.on("before-quit", (event) => {
-	if (quitting || !host) return;
-	event.preventDefault();
+app.on("before-quit", () => {
+	if (quitting) return;
 	quitting = true;
-	log.info("Quit requested; stopping pi processes");
+	log.info("Quit requested; leaving the session supervisor running");
 	if (mainWindow && !mainWindow.isDestroyed()) saveBounds(mainWindow);
 	sessions?.stop();
 	auth?.cancelLogin();
-	void host
-		.dispose()
-		.catch((error) => log.error("Error stopping pi processes", error))
-		.finally(() => {
-			log.info("pi processes stopped; quitting");
-			// Cleanup is done. Re-entering app.quit() is unreliable (it is dropped while a
-			// window is still loading), so finish with an explicit exit.
-			app.exit(0);
-		});
 });

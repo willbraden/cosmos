@@ -51,6 +51,12 @@ describe("session titles", () => {
 		).toBe("What you can do");
 	});
 
+	it("does not show a live first-message fallback for a brand-new session", () => {
+		expect(
+			sessionTitle(undefined, "New session", "hey i just want to test this"),
+		).toBe("New session");
+	});
+
 	it("falls back when there is no usable text", () => {
 		expect(sessionTitle(undefined)).toBe("New session");
 		expect(sessionTitle({ firstMessage: "   " }, "Untitled")).toBe("Untitled");

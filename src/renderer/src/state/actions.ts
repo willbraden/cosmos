@@ -1,4 +1,5 @@
 import type {
+	LiveSessionState,
 	PermissionMode,
 	SessionEventBatch,
 	SessionExit,
@@ -119,10 +120,52 @@ export async function bootstrap(): Promise<void> {
 	await refreshSessions();
 	void refreshProviders();
 
+	const live = await api.getLiveSessions();
+	if (await restoreLiveSessions(live)) return;
+
 	// Start where the user left off: a fresh session in their most recent project.
 	const lastProject = settings.recentProjects[0];
 	if (lastProject) void startNewSession(lastProject);
 	else useStore.setState({ pendingNewSession: true });
+}
+
+async function restoreLiveSessions(live: LiveSessionState): Promise<boolean> {
+	if (live.tabs.length === 0) return false;
+	const tabs = Object.fromEntries(
+		live.tabs.map((tab) => [
+			tab.tabId,
+			{
+				...newTab(
+					tab.tabId,
+					tab.cwd,
+					tab.permissionMode,
+					tab.sessionPath,
+					tab.openedAt,
+				),
+				opened: true,
+				status: "starting" as const,
+				isStreaming: tab.isStreaming,
+				isCompacting: tab.isCompacting,
+				dialogs: tab.dialogs.map((dialog) => ({ ...dialog, receivedAt: Date.now() })),
+				statuses: tab.statuses,
+				widgets: tab.widgets,
+			},
+		]),
+	);
+	const activeTabId =
+		live.visibleTabId && tabs[live.visibleTabId]
+			? live.visibleTabId
+			: [...live.tabs].sort((a, b) => b.openedAt - a.openedAt)[0]?.tabId ?? null;
+	useStore.setState({
+		tabs,
+		activeTabId,
+		pendingNewSession: false,
+		focusComposerTick: activeTabId ? useStore.getState().focusComposerTick + 1 : 0,
+	});
+	api.setVisibleSession(activeTabId);
+	await Promise.allSettled(live.tabs.map((tab) => loadTab(tab.tabId)));
+	updateBadge();
+	return true;
 }
 
 export function applyTheme(theme: "system" | "light" | "dark"): void {

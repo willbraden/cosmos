@@ -84,7 +84,13 @@ async function readImage(file: File): Promise<Attachment | null> {
 	};
 }
 
-export function Composer({ tab }: { tab: TabState }) {
+export function Composer({
+	tab,
+	centered = false,
+}: {
+	tab: TabState;
+	centered?: boolean;
+}) {
 	const textarea = useRef<HTMLTextAreaElement>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
 	const focusTick = useStore((s) => s.focusComposerTick);
@@ -273,7 +279,7 @@ export function Composer({ tab }: { tab: TabState }) {
 	const showHintRow = busy || statuses.length > 0;
 
 	return (
-		<div className="composer-wrap">
+		<div className={`composer-wrap${centered ? " centered" : ""}`}>
 			{above.map(([key, widget]) => (
 				<div key={key} className="widget">
 					{widget.lines.join("\n")}
@@ -441,7 +447,9 @@ export function Composer({ tab }: { tab: TabState }) {
 						</>
 					)}
 					{statuses.map((status) => (
-						<span key={status}>{status}</span>
+						<span key={status} className="composer-status" title={status}>
+							{status}
+						</span>
 					))}
 				</div>
 			)}

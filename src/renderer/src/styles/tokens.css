@@ -113,9 +113,9 @@
 	--color-background-neutral-default-strong-idle: #20263a;
 	--color-background-neutral-default-strong-hover: #2c334a;
 
-	--color-background-brand-default-strong-idle: #635bff;
-	--color-background-brand-default-strong-hover: #5148f5;
-	--color-background-brand-default-subtle-idle: #ece9ff;
+	--color-background-brand-default-strong-idle: #2b2f36;
+	--color-background-brand-default-strong-hover: #1f2329;
+	--color-background-brand-default-subtle-idle: #eef0f3;
 
 	--color-background-negative-default-normal-idle: #d84e39;
 	--color-background-negative-default-subtle-idle: #fdecea;
@@ -128,7 +128,7 @@
 	--color-foreground-neutral-default-normal: #5b6478;
 	--color-foreground-neutral-default-subtle: #8690a6;
 	--color-foreground-neutral-inverse-strong: #ffffff;
-	--color-foreground-brand-strong: #635bff;
+	--color-foreground-brand-strong: #2b2f36;
 
 	--color-foreground-negative-default-strong: #d84e39;
 	--color-foreground-warning-strong: #b97816;
@@ -136,8 +136,8 @@
 
 	--color-border-neutral-subtle: #d9e0ef;
 	--color-border-neutral-normal: #c5cede;
-	--color-border-neutral-strong: #635bff;
-	--color-border-brand-strong: #635bff;
+	--color-border-neutral-strong: #8e949f;
+	--color-border-brand-strong: #8e949f;
 	--color-border-negative-default: #d84e39;
 
 	/* Shadows resolve to zero in dark mode per the token spec. */
@@ -146,8 +146,12 @@
 	--shadow-float: 0 12px 12px -4px rgb(0 0 0 / 10%), 0 0 16px 0 rgb(0 0 0 / 10%);
 	--shadow-md: var(--shadow-lift);
 
-	/* Contextual helper for strong brand surfaces. */
+	/* Contextual helper for strong action surfaces. */
 	--app-foreground-on-brand-strong: var(--color-foreground-neutral-inverse-strong);
+	--accent: #8f98a8;
+	--warning: var(--color-foreground-warning-strong);
+	--danger: var(--color-foreground-negative-default-strong);
+	--success: var(--color-foreground-positive-strong);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -167,9 +171,9 @@
 		--color-background-neutral-default-strong-idle: #f3f5ff;
 		--color-background-neutral-default-strong-hover: #e3e7f8;
 
-		--color-background-brand-default-strong-idle: #8e88ff;
-		--color-background-brand-default-strong-hover: #a29dff;
-		--color-background-brand-default-subtle-idle: #2a2f58;
+		--color-background-brand-default-strong-idle: #e6e9ef;
+		--color-background-brand-default-strong-hover: #f1f3f7;
+		--color-background-brand-default-subtle-idle: #232830;
 
 		--color-background-negative-default-normal-idle: #ff8a76;
 		--color-background-negative-default-subtle-idle: #412520;
@@ -182,7 +186,7 @@
 		--color-foreground-neutral-default-normal: #b6bfd4;
 		--color-foreground-neutral-default-subtle: #7f8aa5;
 		--color-foreground-neutral-inverse-strong: #111528;
-		--color-foreground-brand-strong: #8e88ff;
+		--color-foreground-brand-strong: #d7dbe3;
 
 		--color-foreground-negative-default-strong: #ff8a76;
 		--color-foreground-warning-strong: #f2bd63;
@@ -190,15 +194,19 @@
 
 		--color-border-neutral-subtle: #2a3452;
 		--color-border-neutral-normal: #394566;
-		--color-border-neutral-strong: #8e88ff;
-		--color-border-brand-strong: #8e88ff;
+		--color-border-neutral-strong: #677080;
+		--color-border-brand-strong: #677080;
 		--color-border-negative-default: #ff8a76;
 
 		--shadow-rest: 0 0 0 0 rgb(255 255 255 / 0%);
 		--shadow-lift: 0 0 0 0 rgb(255 255 255 / 0%);
 		--shadow-float: 0 0 0 0 rgb(255 255 255 / 0%);
 
-		--app-foreground-on-brand-strong: var(--color-foreground-neutral-default-strong);
+		--app-foreground-on-brand-strong: var(--color-foreground-neutral-inverse-strong);
+		--accent: #c0c6d1;
+		--warning: var(--color-foreground-warning-strong);
+		--danger: var(--color-foreground-negative-default-strong);
+		--success: var(--color-foreground-positive-strong);
 	}
 }
 
@@ -218,9 +226,9 @@
 	--color-background-neutral-default-strong-idle: #f3f5ff;
 	--color-background-neutral-default-strong-hover: #e3e7f8;
 
-	--color-background-brand-default-strong-idle: #8e88ff;
-	--color-background-brand-default-strong-hover: #a29dff;
-	--color-background-brand-default-subtle-idle: #2a2f58;
+	--color-background-brand-default-strong-idle: #e6e9ef;
+	--color-background-brand-default-strong-hover: #f1f3f7;
+	--color-background-brand-default-subtle-idle: #232830;
 
 	--color-background-negative-default-normal-idle: #ff8a76;
 	--color-background-negative-default-subtle-idle: #412520;
@@ -233,7 +241,7 @@
 	--color-foreground-neutral-default-normal: #b6bfd4;
 	--color-foreground-neutral-default-subtle: #7f8aa5;
 	--color-foreground-neutral-inverse-strong: #111528;
-	--color-foreground-brand-strong: #8e88ff;
+	--color-foreground-brand-strong: #d7dbe3;
 
 	--color-foreground-negative-default-strong: #ff8a76;
 	--color-foreground-warning-strong: #f2bd63;
@@ -241,13 +249,17 @@
 
 	--color-border-neutral-subtle: #2a3452;
 	--color-border-neutral-normal: #394566;
-	--color-border-neutral-strong: #8e88ff;
-	--color-border-brand-strong: #8e88ff;
+	--color-border-neutral-strong: #677080;
+	--color-border-brand-strong: #677080;
 	--color-border-negative-default: #ff8a76;
 
 	--shadow-rest: 0 0 0 0 rgb(255 255 255 / 0%);
 	--shadow-lift: 0 0 0 0 rgb(255 255 255 / 0%);
 	--shadow-float: 0 0 0 0 rgb(255 255 255 / 0%);
 
-	--app-foreground-on-brand-strong: var(--color-foreground-neutral-default-strong);
+	--app-foreground-on-brand-strong: var(--color-foreground-neutral-inverse-strong);
+	--accent: #c0c6d1;
+	--warning: var(--color-foreground-warning-strong);
+	--danger: var(--color-foreground-negative-default-strong);
+	--success: var(--color-foreground-positive-strong);
 }

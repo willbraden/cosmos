@@ -28,6 +28,7 @@ import { refreshProviders } from "../state/actions";
 import { type SettingsPane, toast, useStore } from "../state/store";
 import { LoginDialog } from "./LoginDialog";
 import { PERMISSION_MODES } from "./Pickers";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 function Switch({
 	on,
@@ -666,6 +667,12 @@ function oauthSetupGuidePath(info: AppInfo | undefined, server: McpServerDefinit
 }
 
 function oauthHelpText(server: McpServerDefinition): string {
+	if (isFigmaMcp(server) && server.oauthConnected && server.sessionAvailable === false) {
+		return server.sessionAvailabilityMessage ?? "Cosmos found the Figma sign-in, but fresh sessions still are not loading the Figma tools.";
+	}
+	if (isFigmaMcp(server) && server.oauthConnected && server.sessionAvailable === true) {
+		return server.sessionAvailabilityMessage ?? "Figma is connected and fresh sessions can load the Figma tools.";
+	}
 	if (isFigmaMcp(server)) {
 		return "Click Connect Figma for guided Xcode beta setup. Cosmos watches for the finished sign-in and can import it back into Pi automatically.";
 	}
@@ -738,7 +745,7 @@ function FigmaConnectDialog({
 
 					{waiting && (
 						<div className="working">
-							<span className="spinner" />
+							<SpinnerIcon size={14} />
 							{flow.phase === "importing" ? " Importing Figma sign-in from Xcode…" : " Checking Xcode and Figma sign-in…"}
 						</div>
 					)}
@@ -1013,7 +1020,7 @@ function Mcps() {
 			</div>
 			{loading && (
 				<div className="working">
-					<span className="spinner" /> Loading MCP config…
+					<SpinnerIcon size={14} /> Loading MCP config…
 				</div>
 			)}
 			{!loading && overview && (
@@ -1076,6 +1083,12 @@ function Mcps() {
 													)}
 													{server.auth === "oauth" && server.oauthConnected && (
 														<span className="mcp-badge oauth">OAuth ready</span>
+													)}
+													{server.auth === "oauth" && server.oauthConnected && server.sessionAvailable === true && (
+														<span className="mcp-badge neutral">Ready in new sessions</span>
+													)}
+													{server.auth === "oauth" && server.oauthConnected && server.sessionAvailable === false && (
+														<span className="mcp-badge warning">Not loading in sessions</span>
 													)}
 													{server.auth === "oauth" && !server.oauthConnected && (
 														<span className="mcp-badge warning">OAuth needed</span>

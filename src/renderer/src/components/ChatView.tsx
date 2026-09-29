@@ -1,13 +1,14 @@
 import { FileDiff, FolderOpen, GitFork, RotateCw, SquareTerminal, TriangleAlert } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { api, basename, formatCost, formatTokens, tildify } from "../lib/api";
-import { cloneSession, renameSession, retryTab, sendDraft, setDraft } from "../state/actions";
+import { cloneSession, renameSession, retryTab } from "../state/actions";
 import { collectFileChanges, firstUserMessage } from "../state/chat-model";
 import { sessionTitle, type TabState, useStore } from "../state/store";
 import { Composer } from "./Composer";
 import { DialogCard } from "./DialogCard";
 import { useDismiss } from "./Pickers";
 import { Transcript } from "./Transcript";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 function ContextMeter({ tab }: { tab: TabState }) {
 	const usage = tab.stats?.contextUsage;
@@ -152,47 +153,31 @@ export function ChatHeader({ tab, scrolled }: { tab: TabState; scrolled: boolean
 function Welcome({ tab }: { tab: TabState }) {
 	const providers = useStore((s) => s.providers);
 	const models = useStore((s) => s.models);
-	const noProvider = tab.status === "ready" && models.length === 0 && !providers.some((p) => p.configured);
-	const starters = [
-		{
-			label: "Plan a feature",
-			prompt: "Help me plan a feature for this app. Ask a few clarifying questions, then propose an approach.",
-		},
-		{
-			label: "Build something",
-			prompt: "Help me implement a change in this project. Start by asking what I want to build.",
-		},
-		{
-			label: "Fix an issue",
-			prompt: "Help me debug an issue in this project. Ask what's broken, then guide me to a fix.",
-		},
-	];
-	const startWithPrompt = (prompt: string) => {
-		setDraft(tab.tabId, prompt);
-		void sendDraft(tab.tabId);
-	};
+	const noProvider =
+		tab.status === "ready" &&
+		models.length === 0 &&
+		!providers.some((p) => p.configured);
 	return (
-		<div className="empty empty-cosmos empty-chat-welcome">
-			<h1 className="cosmos-wordmark cosmos-wordmark-hero" aria-label="cosmos">
-				<span className="cosmos-wordmark-light">cosm</span>
-				<span className="cosmos-wordmark-strong">os</span>
-			</h1>
-			<div className="empty-chat-actions" role="group" aria-label="Suggested ways to start">
-				{starters.map((starter) => (
-					<button key={starter.label} type="button" className="empty-chat-action" onClick={() => startWithPrompt(starter.prompt)}>
-						{starter.label}
-					</button>
-				))}
-			</div>
+		<div className="empty-chat-welcome minimal">
+			<h1>Ready when you are.</h1>
 			{noProvider && (
-				<div className="welcome-card">
-					<TriangleAlert size={18} style={{ color: "var(--warning)", flexShrink: 0, marginTop: 2 }} />
+				<div className="welcome-card compact">
+					<TriangleAlert
+						size={18}
+						style={{ color: "var(--warning)", flexShrink: 0, marginTop: 2 }}
+					/>
 					<div>
-						<div style={{ fontWeight: 600, marginBottom: 2 }}>Connect a model provider</div>
-						<div className="small-text muted" style={{ marginBottom: 10 }}>
-							Sign in with a subscription (Claude, ChatGPT, Copilot…) or add an API key. Credentials are stored in pi's own auth file, shared with the pi CLI.
+						<div style={{ fontWeight: 600, marginBottom: 2 }}>
+							Connect a model provider
 						</div>
-						<button type="button" className="btn primary small" onClick={() => useStore.setState({ settingsPane: "providers" })}>
+						<div className="small-text muted" style={{ marginBottom: 10 }}>
+							Sign in with a subscription or add an API key to start chatting.
+						</div>
+						<button
+							type="button"
+							className="btn primary small"
+							onClick={() => useStore.setState({ settingsPane: "providers" })}
+						>
 							Connect a provider
 						</button>
 					</div>
@@ -224,16 +209,22 @@ export function ChatView({ tab }: { tab: TabState }) {
 		);
 	}
 
+	const showCenteredComposer =
+		tab.status !== "starting" && tab.chat.items.length === 0 && !tab.isStreaming;
+
 	return (
 		<div className="main">
 			<ChatHeader tab={tab} scrolled={scrolled} />
-			<div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
+			<div className={showCenteredComposer ? "chat-stage chat-stage-empty" : "chat-stage"}>
 				{tab.status === "starting" && tab.chat.items.length === 0 ? (
 					<div className="empty">
-						<span className="spinner" style={{ width: 20, height: 20 }} />
+						<SpinnerIcon size={20} />
 					</div>
-				) : tab.chat.items.length === 0 && !tab.isStreaming ? (
-					<Welcome tab={tab} />
+				) : showCenteredComposer ? (
+					<div className="empty-chat-shell">
+						<Welcome tab={tab} />
+						<Composer tab={tab} centered />
+					</div>
 				) : (
 					<Transcript tab={tab} onScrolled={setScrolled} />
 				)}
@@ -243,7 +234,7 @@ export function ChatView({ tab }: { tab: TabState }) {
 					<DialogCard key={dialog.id} tabId={tab.tabId} dialog={dialog} />
 				</div>
 			)}
-			<Composer tab={tab} />
+			{!showCenteredComposer && <Composer tab={tab} />}
 		</div>
 	);
 }

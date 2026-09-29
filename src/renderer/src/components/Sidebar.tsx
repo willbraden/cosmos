@@ -1,4 +1,4 @@
-import type { SessionSummary } from "@shared/ipc";
+import type { SessionSummary, WorkspaceHealth } from "@shared/ipc";
 import {
 	applyManualSessionOrder,
 	compareSessionOrder,
@@ -7,7 +7,9 @@ import {
 } from "@shared/session-order";
 import {
 	ChevronRight,
+	Folder,
 	FolderPlus,
+	GitFork,
 	PanelLeftClose,
 	Pin,
 	Plus,
@@ -24,6 +26,7 @@ import {
 	useState,
 } from "react";
 import { api, basename, relativeTime, tildify } from "../lib/api";
+import { SpinnerIcon } from "./SpinnerIcon";
 import { firstUserMessage } from "../state/chat-model";
 import {
 	activateTab,
@@ -63,6 +66,8 @@ type DragState = {
 	overKey: string | null;
 	placement: SessionDropPlacement;
 };
+
+type RepoKind = "supported" | "experiment";
 
 function firstTimestamp(tab: TabState): number | undefined {
 	for (const item of tab.chat.items)
@@ -195,7 +200,7 @@ const SessionRow = memo(function SessionRow({
 			onDragEnd={onDragEnd}
 		>
 			{busy ? (
-				<span className="spinner" title="Working" />
+				<SpinnerIcon size={12} title="Working" />
 			) : attention ? (
 				<span className="status-dot attention" title="Waiting for you" />
 			) : tab?.unread ? (
@@ -219,6 +224,7 @@ function Group({
 	rows,
 	activeKey,
 	pinned,
+	repoKind,
 	dragState,
 	onStartDrag,
 	onHoverRow,
@@ -231,6 +237,7 @@ function Group({
 	rows: Row[];
 	activeKey: string | null;
 	pinned: Set<string>;
+	repoKind: RepoKind;
 	dragState: DragState | null;
 	onStartDrag(cwd: string, stableKey: string): void;
 	onHoverRow(
@@ -253,26 +260,28 @@ function Group({
 	const [expanded, setExpanded] = useState(false);
 	const visible = expanded ? [...rows] : rows.slice(0, GROUP_PREVIEW);
 	const draggingInGroup = dragState?.cwd === cwd;
+	const RepoIcon = repoKind === "supported" ? GitFork : Folder;
 	// Always keep the active session visible even when the group is truncated.
 	const activeRow = rows.find((r) => r.key === activeKey);
 	if (activeRow && !visible.includes(activeRow)) visible.push(activeRow);
 	return (
-		<div className="sidebar-section">
-			<div style={{ display: "flex", alignItems: "center" }}>
+		<div className={`sidebar-section sidebar-section-${repoKind}`}>
+			<div className="sidebar-section-row">
 				<button
 					type="button"
 					className="sidebar-section-header"
 					onClick={() => setCollapsed(!collapsed)}
 					title={tildify(cwd, home)}
+					aria-expanded={!collapsed}
 				>
-					<ChevronRight
-						size={12}
-						style={{
-							transform: collapsed ? undefined : "rotate(90deg)",
-							transition: "transform .15s",
-						}}
-					/>
-					{basename(cwd) || cwd}
+					<span className="sidebar-section-header-icon" aria-hidden="true">
+						<RepoIcon size={12} className="sidebar-section-kind-icon" />
+						<ChevronRight
+							size={12}
+							className={`sidebar-section-chevron${collapsed ? "" : " expanded"}`}
+						/>
+					</span>
+					<span className="sidebar-section-header-label">{basename(cwd) || cwd}</span>
 				</button>
 				<button
 					type="button"
@@ -341,8 +350,8 @@ function Group({
 					{rows.length > GROUP_PREVIEW && (
 						<button
 							type="button"
-							className="session-row"
-							style={{ color: "var(--text-3)", fontSize: 12 }}
+							className="session-more-btn"
+							aria-expanded={expanded}
 							onClick={() => setExpanded(!expanded)}
 						>
 							{expanded ? "Show less" : `Show ${rows.length - GROUP_PREVIEW} more`}
@@ -359,6 +368,7 @@ export function Sidebar() {
 	const sessions = useStore((s) => s.sessions);
 	const tabs = useStore((s) => s.tabs);
 	const activeTabId = useStore((s) => s.activeTabId);
+	const [workspaceHealth, setWorkspaceHealth] = useState<WorkspaceHealth | null>(null);
 	const pinnedPaths = settings.pinnedSessions ?? [];
 	const sidebarSessionOrder = settings.sidebarSessionOrder ?? {};
 	const searchQuery = useStore((s) => s.searchQuery);
@@ -371,6 +381,21 @@ export function Sidebar() {
 	useEffect(() => {
 		if (focusSearchTick > 0) searchRef.current?.focus();
 	}, [focusSearchTick]);
+
+	useEffect(() => {
+		let cancelled = false;
+		void api
+			.getWorkspaceHealth()
+			.then((health) => {
+				if (!cancelled) setWorkspaceHealth(health);
+			})
+			.catch(() => {
+				if (!cancelled) setWorkspaceHealth(null);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
 
 	const rows = useMemo(() => {
 		const tabsByPath = new Map<string, TabState>();
@@ -428,6 +453,13 @@ export function Sidebar() {
 	}, [activeTabId, tabs, sessions]);
 
 	const pinned = useMemo(() => new Set(pinnedPaths), [pinnedPaths]);
+	const repoKinds = useMemo(() => {
+		const kinds = new Map<string, RepoKind>();
+		for (const repo of workspaceHealth?.repos ?? []) kinds.set(repo.path, "supported");
+		for (const repo of workspaceHealth?.experiments ?? [])
+			if (!kinds.has(repo.path)) kinds.set(repo.path, "experiment");
+		return kinds;
+	}, [workspaceHealth]);
 	const query = searchQuery.trim().toLowerCase();
 
 	const { pinnedRows, groups, results } = useMemo(() => {
@@ -628,6 +660,7 @@ export function Sidebar() {
 								rows={list}
 								activeKey={activeKey}
 								pinned={pinned}
+								repoKind={repoKinds.get(cwd) ?? "experiment"}
 								dragState={dragState}
 								onStartDrag={startDrag}
 								onHoverRow={hoverRow}

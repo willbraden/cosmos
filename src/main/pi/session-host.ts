@@ -1,14 +1,17 @@
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import log from "electron-log/main";
+import { runtimeLog as log } from "../runtime-log";
 import type {
+	LiveDialogRequest,
+	LiveSessionState,
 	OpenSessionRequest,
 	PermissionMode,
 	PiCommand,
 	SessionEventBatch,
 	SessionExit,
+	SessionWidgetState,
 } from "../../shared/ipc";
-import type { PiRecord, SessionState } from "../../shared/pi-types";
+import type { ExtensionUiRequest, PiRecord, SessionState } from "../../shared/pi-types";
 import { PiProcess } from "./pi-process";
 
 export interface HostEnvironment {
@@ -23,21 +26,25 @@ export interface HostEnvironment {
 
 interface Tab {
 	id: string;
+	openedAt: number;
 	cwd: string;
 	sessionPath?: string;
 	permissionMode: PermissionMode;
 	proc: PiProcess | null;
 	starting: Promise<PiProcess> | null;
 	busy: boolean;
+	isCompacting: boolean;
 	/** Dialog requests awaiting an answer; a tab with open dialogs is never suspended. */
 	openDialogs: Set<string>;
+	dialogRequests: Map<string, LiveDialogRequest>;
+	statuses: Record<string, string>;
+	widgets: Record<string, SessionWidgetState>;
 	lastActivity: number;
 	/** Restart once idle, e.g. after credentials changed. */
 	stale: boolean;
 	stopping: boolean;
 }
 
-const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 /** Commands after which pi may be attached to a different session file. */
 const SESSION_CHANGING = new Set([
 	"new_session",
@@ -85,8 +92,10 @@ export class SessionHost {
 			if (!existsSync(request.sessionPath))
 				throw new Error(`Session file not found: ${request.sessionPath}`);
 		}
+		const now = Date.now();
 		const tab: Tab = {
 			id: request.tabId,
+			openedAt: now,
 			cwd: request.cwd,
 			sessionPath: request.sessionPath,
 			permissionMode: VALID_MODES.has(request.permissionMode)
@@ -95,8 +104,12 @@ export class SessionHost {
 			proc: null,
 			starting: null,
 			busy: false,
+			isCompacting: false,
 			openDialogs: new Set(),
-			lastActivity: Date.now(),
+			dialogRequests: new Map(),
+			statuses: {},
+			widgets: {},
+			lastActivity: now,
 			stale: false,
 			stopping: false,
 		};
@@ -144,6 +157,7 @@ export class SessionHost {
 		if (typeof response.id !== "string")
 			throw new Error("UI response needs the request id");
 		tab.openDialogs.delete(response.id);
+		tab.dialogRequests.delete(response.id);
 		tab.lastActivity = Date.now();
 		// Only these fields are part of the extension_ui_response record.
 		const record: Record<string, unknown> = {
@@ -162,6 +176,31 @@ export class SessionHost {
 		this.visibleTabId = tabId && this.tabs.has(tabId) ? tabId : null;
 		const tab = this.visibleTabId ? this.tabs.get(this.visibleTabId) : undefined;
 		if (tab) tab.lastActivity = Date.now();
+	}
+
+	snapshot(): LiveSessionState {
+		return {
+			visibleTabId: this.visibleTabId && this.tabs.has(this.visibleTabId)
+				? this.visibleTabId
+				: null,
+			tabs: [...this.tabs.values()].map((tab) => ({
+				tabId: tab.id,
+				openedAt: tab.openedAt,
+				cwd: tab.cwd,
+				sessionPath: tab.sessionPath,
+				permissionMode: tab.permissionMode,
+				isStreaming: tab.busy,
+				isCompacting: tab.isCompacting,
+				dialogs: [...tab.dialogRequests.values()],
+				statuses: { ...tab.statuses },
+				widgets: Object.fromEntries(
+					Object.entries(tab.widgets).map(([key, widget]) => [
+						key,
+						{ lines: [...widget.lines], placement: widget.placement },
+					]),
+				),
+			})),
+		};
 	}
 
 	async close(tabId: string): Promise<void> {
@@ -252,7 +291,9 @@ export class SessionHost {
 			(code: number | null, signal: string | null, stderrTail: string) => {
 				if (tab.proc === proc) tab.proc = null;
 				tab.busy = false;
+				tab.isCompacting = false;
 				tab.openDialogs.clear();
+				tab.dialogRequests.clear();
 				if (tab.stopping || !this.tabs.has(tab.id)) return;
 				log.error(
 					`pi exited unexpectedly (code ${code}, signal ${signal}) for ${tab.sessionPath ?? tab.cwd}`,
@@ -303,11 +344,52 @@ export class SessionHost {
 				if (tab.stale && tab.openDialogs.size === 0)
 					void this.suspend(tab, "permission mode changed");
 				break;
+			case "compaction_start":
+				tab.isCompacting = true;
+				break;
+			case "compaction_end":
+				tab.isCompacting = false;
+				break;
+			case "queue_update":
+				tab.lastActivity = Date.now();
+				break;
 			case "extension_ui_request":
-				if (DIALOG_METHODS.has(record.method)) tab.openDialogs.add(record.id);
+				this.applyUiRequest(tab, record);
 				break;
 		}
 		this.enqueue(tab.id, record);
+	}
+
+	private applyUiRequest(tab: Tab, record: ExtensionUiRequest): void {
+		switch (record.method) {
+			case "select":
+			case "confirm":
+			case "input":
+			case "editor":
+				tab.openDialogs.add(record.id);
+				tab.dialogRequests.set(record.id, record);
+				break;
+			case "setStatus": {
+				const { [record.statusKey]: _old, ...rest } = tab.statuses;
+				tab.statuses = record.statusText
+					? { ...rest, [record.statusKey]: record.statusText }
+					: rest;
+				break;
+			}
+			case "setWidget": {
+				const { [record.widgetKey]: _old, ...rest } = tab.widgets;
+				tab.widgets = record.widgetLines?.length
+					? {
+						...rest,
+						[record.widgetKey]: {
+							lines: [...record.widgetLines],
+							placement: record.widgetPlacement ?? "aboveEditor",
+						},
+					}
+					: rest;
+				break;
+			}
+		}
 	}
 
 	private enqueue(tabId: string, record: PiRecord): void {
@@ -359,7 +441,9 @@ export class SessionHost {
 			tab.stopping = false;
 			if (tab.proc === proc) tab.proc = null;
 			tab.busy = false;
+			tab.isCompacting = false;
 			tab.openDialogs.clear();
+			tab.dialogRequests.clear();
 		}
 	}
 }

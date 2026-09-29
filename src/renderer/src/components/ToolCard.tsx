@@ -19,6 +19,7 @@ import { api } from "../lib/api";
 import type { Block, ToolRun } from "../state/chat-model";
 import { DiffView, diffStats } from "./DiffView";
 import { CopyButton } from "./Markdown";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 type ToolCallBlock = Extract<Block, { type: "toolCall" }>;
 
@@ -111,7 +112,7 @@ export const ToolCard = memo(function ToolCard({
 							<span className="stat-add">+{stats.added}</span> <span className="stat-del">−{stats.removed}</span>
 						</span>
 					)}
-					{status === "running" || status === "pending" ? <span className="spinner" /> : null}
+					{status === "running" || status === "pending" ? <SpinnerIcon size={14} /> : null}
 					{status === "waiting" && <span style={{ color: "var(--warning)" }}>Needs approval</span>}
 					{status === "done" && <CircleCheck size={14} className="tool-status-icon ok" />}
 					{status === "error" && <CircleAlert size={14} className="tool-status-icon err" />}
