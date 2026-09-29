@@ -31,8 +31,10 @@ import { encodeJsonl, JsonlDecoder } from "../src/main/pi/jsonl";
 import { sanitizeSettingsPatch } from "../src/main/settings";
 import { parseEnvOutput } from "../src/main/shell-env";
 import {
+	PERMISSION_MODE_COMMAND,
 	PERMISSION_OPTIONS,
 	PERMISSION_PROMPT_MARKER,
+	permissionNeedsApproval,
 } from "../src/shared/pi-types";
 
 describe("JsonlDecoder", () => {
@@ -99,6 +101,32 @@ describe("desktop bridge extension", () => {
 		expect(bridge.parseMode(" auto ")).toBe("auto");
 		expect(bridge.parseMode("yolo")).toBeUndefined();
 		expect(bridge.parseMode(undefined)).toBeUndefined();
+	});
+
+	it("registers the slash command the host uses for live mode switches", () => {
+		const previous = process.env.PI_DESKTOP;
+		process.env.PI_DESKTOP = "1";
+		const commands = new Map<string, { handler(args: string): Promise<void> }>();
+		try {
+			bridge.default({
+				registerCommand: (name: string, spec: unknown) =>
+					commands.set(name, spec as { handler(args: string): Promise<void> }),
+				on: () => {},
+			} as never);
+		} finally {
+			if (previous === undefined) delete process.env.PI_DESKTOP;
+			else process.env.PI_DESKTOP = previous;
+		}
+		expect([...commands.keys()]).toContain(PERMISSION_MODE_COMMAND);
+	});
+
+	it("agrees with the shared approval mirror the renderer uses", () => {
+		const none = new Set<string>();
+		for (const mode of ["ask", "acceptEdits", "auto"] as const)
+			for (const tool of ["read", "grep", "edit", "write", "bash", "mcp_thing"])
+				expect(permissionNeedsApproval(mode, tool)).toBe(
+					bridge.needsApproval(mode, tool, none),
+				);
 	});
 });
 

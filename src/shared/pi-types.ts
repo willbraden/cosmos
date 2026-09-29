@@ -3,6 +3,8 @@
 // docs/json.md, docs/message-types.md. Everything here tolerates unknown fields
 // and unknown record types, because pi and its extensions can add both.
 
+import type { PermissionMode } from "./ipc";
+
 export interface TextContent {
 	type: "text";
 	text: string;
@@ -247,6 +249,14 @@ export type PiRecord =
 /** Title prefix the bundled desktop extension uses for permission prompts. */
 export const PERMISSION_PROMPT_MARKER = "⁣pi-desktop-permission⁣";
 
+/**
+ * Slash command the bundled desktop extension registers to change the permission mode on a
+ * live pi process. Pi executes extension commands inline even while the agent is streaming,
+ * so this takes effect mid-turn without restarting the process. Keep in sync with
+ * resources/pi-extension/desktop-bridge.ts.
+ */
+export const PERMISSION_MODE_COMMAND = "desktop-permission-mode";
+
 export interface PermissionPromptPayload {
 	toolCallId: string;
 	toolName: string;
@@ -258,3 +268,21 @@ export const PERMISSION_OPTIONS = {
 	always: "Always allow this tool in this session",
 	deny: "Deny",
 } as const;
+
+/**
+ * Mirror of the bridge extension's approval rules, for deciding whether a prompt that is
+ * already on screen still applies after a mode switch. Keep in sync with
+ * resources/pi-extension/desktop-bridge.ts (classifyTool / needsApproval).
+ */
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const EDIT_TOOLS = new Set(["edit", "write"]);
+
+export function permissionNeedsApproval(
+	mode: PermissionMode,
+	toolName: string,
+): boolean {
+	if (mode === "auto") return false;
+	if (READ_ONLY_TOOLS.has(toolName)) return false;
+	if (EDIT_TOOLS.has(toolName)) return mode === "ask";
+	return true;
+}

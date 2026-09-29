@@ -12,6 +12,7 @@ import type {
 	SessionWidgetState,
 } from "../../shared/ipc";
 import type { ExtensionUiRequest, PiRecord, SessionState } from "../../shared/pi-types";
+import { PERMISSION_MODE_COMMAND } from "../../shared/pi-types";
 import { PiProcess } from "./pi-process";
 
 export interface HostEnvironment {
@@ -55,6 +56,8 @@ const SESSION_CHANGING = new Set([
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VALID_MODES = new Set<PermissionMode>(["ask", "acceptEdits", "auto"]);
 const FLUSH_MS = 16;
+/** A live mode switch is a local extension command; if pi is wedged, fall back to a restart. */
+const MODE_SYNC_TIMEOUT_MS = 5_000;
 
 export class SessionHost {
 	private readonly tabs = new Map<string, Tab>();
@@ -126,13 +129,28 @@ export class SessionHost {
 		const tab = this.requireTab(tabId);
 		tab.lastActivity = Date.now();
 
-		// Desktop-only pseudo command: keep the chosen mode on the tab, then restart
-		// the pi process so the bridge extension re-reads PI_DESKTOP_PERMISSION_MODE.
+		// Desktop-only pseudo command. The bridge extension registers a slash command that
+		// updates its mode in place, and pi runs extension commands inline even mid-turn, so
+		// the change applies to the tool call that is prompting right now. Restarting the
+		// process (which re-reads PI_DESKTOP_PERMISSION_MODE) is only the fallback.
 		if (command.type === "desktop_set_permission_mode") {
 			const mode = command.mode as PermissionMode;
 			if (!VALID_MODES.has(mode)) throw new Error("Invalid permission mode");
 			tab.permissionMode = mode;
-			if (tab.proc?.running) {
+			const proc = tab.proc;
+			if (!proc?.running) return null;
+			try {
+				await proc.request(
+					{ type: "prompt", message: `/${PERMISSION_MODE_COMMAND} ${mode}` },
+					MODE_SYNC_TIMEOUT_MS,
+				);
+				tab.stale = false;
+			} catch (error) {
+				log.warn(
+					`[pi ${proc.pid}] live permission mode switch failed, falling back to restart: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
 				if (tab.busy || tab.openDialogs.size > 0) tab.stale = true;
 				else await this.suspend(tab, "permission mode changed");
 			}
