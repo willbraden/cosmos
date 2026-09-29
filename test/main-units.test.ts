@@ -28,6 +28,11 @@ import {
 } from "../src/main/mcp-config";
 import { extractReportedActiveTools } from "../src/main/mcp-session-availability";
 import { encodeJsonl, JsonlDecoder } from "../src/main/pi/jsonl";
+import {
+	isManagedSessionPath,
+	isSessionFile,
+	SessionIndex,
+} from "../src/main/session-index";
 import { sanitizeSettingsPatch } from "../src/main/settings";
 import { parseEnvOutput } from "../src/main/shell-env";
 import { supervisorBuildId } from "../src/main/supervisor-identity";
@@ -442,5 +447,41 @@ describe("supervisor build id", () => {
 
 		writeFileSync(chunk, "export const a = 2;\n");
 		expect(supervisorBuildId(entry)).not.toBe(first);
+	});
+});
+
+describe("session file deletion", () => {
+	function withSessionRoot<T>(run: (root: string) => T): T {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-sessions-"));
+		const previous = process.env.PI_CODING_AGENT_SESSION_DIR;
+		process.env.PI_CODING_AGENT_SESSION_DIR = root;
+		try {
+			return run(root);
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+			else process.env.PI_CODING_AGENT_SESSION_DIR = previous;
+		}
+	}
+
+	it("tells a path outside the session folder apart from a file that is already gone", () => {
+		withSessionRoot((root) => {
+			const missing = join(root, "project", "gone.jsonl");
+			expect(isManagedSessionPath(missing)).toBe(true);
+			expect(isSessionFile(missing)).toBe(false);
+			expect(isManagedSessionPath(join(tmpdir(), "elsewhere.jsonl"))).toBe(false);
+		});
+	});
+
+	it("treats deleting an already-deleted session as a no-op but still rejects foreign paths", async () => {
+		const index = new SessionIndex(() => {});
+		try {
+			await withSessionRoot(async (root) => {
+				await expect(index.trash(join(root, "project", "gone.jsonl"))).resolves.toBeUndefined();
+				await expect(index.trash(join(tmpdir(), "elsewhere.jsonl"))).rejects.toThrow(/outside/);
+				await expect(index.trash(join(root, "notes.txt"))).rejects.toThrow(/Not a pi session file/);
+			});
+		} finally {
+			index.stop();
+		}
 	});
 });
