@@ -2624,6 +2624,19 @@ select {
 	color: var(--color-foreground-brand-strong);
 }
 
+.repo-card-kind-linked {
+	gap: 4px;
+}
+
+.repo-card-progress {
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	margin-top: -4px;
+}
+
 .repo-card-status {
 	border: 1px solid color-mix(in srgb, var(--color-border-neutral-subtle) 92%, transparent);
 	background: color-mix(in srgb, var(--color-background-neutral-default-subtle-idle) 90%, transparent);
@@ -2647,6 +2660,18 @@ select {
 	background: color-mix(in srgb, var(--color-background-negative-default-subtle-idle) 80%, transparent);
 	border-color: color-mix(in srgb, var(--color-border-negative-default) 34%, transparent);
 	color: var(--color-foreground-negative-default-strong);
+}
+
+.repo-card-status-broken-link {
+	background: color-mix(in srgb, var(--color-background-negative-default-subtle-idle) 80%, transparent);
+	border-color: color-mix(in srgb, var(--color-border-negative-default) 34%, transparent);
+	color: var(--color-foreground-negative-default-strong);
+}
+
+.repo-card-status-cloning {
+	background: color-mix(in srgb, var(--color-background-brand-default-subtle-idle) 72%, transparent);
+	border-color: color-mix(in srgb, var(--color-border-brand-strong) 45%, transparent);
+	color: var(--color-foreground-brand-strong);
 }
 
 .repo-card-path {

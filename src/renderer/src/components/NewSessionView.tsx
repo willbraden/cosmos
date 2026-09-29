@@ -1,23 +1,59 @@
 import type { WorkspaceHealth, WorkspaceRepoHealth } from "@shared/ipc";
-import { FlaskConical, FolderOpen, RefreshCw, Settings2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+	Download,
+	FlaskConical,
+	FolderOpen,
+	Link2,
+	Link2Off,
+	RefreshCw,
+	Settings2,
+} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { api, basename, errorMessage, tildify } from "../lib/api";
 import { startNewSession } from "../state/actions";
-import { useStore } from "../state/store";
+import { toast, useStore } from "../state/store";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 function RepoCard({
 	repo,
 	home,
 	kind,
+	cloning,
+	progress,
+	busy,
+	onClone,
+	onLink,
+	onUnlink,
 }: {
 	repo: WorkspaceRepoHealth;
 	home: string | undefined;
 	kind: "core" | "experiment";
+	cloning: boolean;
+	progress: string;
+	busy: boolean;
+	onClone(): void;
+	onLink(): void;
+	onUnlink(): void;
 }) {
 	const ready = repo.exists && repo.isGitRepo;
+	const brokenLink = repo.isSymlink && !repo.exists;
 	const kindLabel = kind === "core" ? "Core repo" : "Experiment";
-	const state = ready ? "ready" : repo.exists ? "needs-git" : "missing";
-	const stateLabel = ready ? "Ready" : repo.exists ? "Needs git" : "Missing";
+	const state = cloning
+		? "cloning"
+		: ready
+			? "ready"
+			: brokenLink
+				? "broken-link"
+				: repo.exists
+					? "needs-git"
+					: "missing";
+	const stateLabel = {
+		cloning: "Cloning…",
+		ready: "Ready",
+		"broken-link": "Broken link",
+		"needs-git": "Needs git",
+		missing: "Missing",
+	}[state];
 	return (
 		<div className="repo-card">
 			<div className="repo-card-header">
@@ -27,25 +63,74 @@ function RepoCard({
 						<span className={`repo-card-kind repo-card-kind-${kind}`}>
 							{kindLabel}
 						</span>
+						{repo.isSymlink && (
+							<span className="repo-card-kind repo-card-kind-linked">
+								<Link2 size={11} /> Linked
+							</span>
+						)}
 					</div>
-					<div className="repo-card-path muted">{tildify(repo.path, home)}</div>
+					<div className="repo-card-path muted">
+						{repo.isSymlink && repo.linkTarget
+							? `${tildify(repo.path, home)} → ${tildify(repo.linkTarget, home)}`
+							: tildify(repo.path, home)}
+					</div>
 				</div>
 				<span className={`repo-card-status repo-card-status-${state}`}>
 					{stateLabel}
 				</span>
 			</div>
+			{cloning && (
+				<div className="repo-card-progress muted" title={progress}>
+					{progress || "Starting clone…"}
+				</div>
+			)}
 			<div className="repo-card-actions">
 				<button
 					type="button"
 					className="btn small"
-					disabled={!ready}
+					disabled={!ready || busy}
 					onClick={() => void startNewSession(repo.path)}
 				>
 					Open {kind === "core" ? "repo" : "project"}
 				</button>
+				{!ready && repo.cloneUrl && !repo.isSymlink && (
+					<button
+						type="button"
+						className="btn small primary"
+						disabled={busy}
+						title={`git clone ${repo.cloneUrl}`}
+						onClick={onClone}
+					>
+						{cloning ? <SpinnerIcon size={12} /> : <Download size={13} />}
+						{cloning ? "Cloning…" : "Clone"}
+					</button>
+				)}
+				{!ready && !repo.isSymlink && (
+					<button
+						type="button"
+						className="btn small"
+						disabled={busy}
+						title="Symlink an existing checkout into the workspace root"
+						onClick={onLink}
+					>
+						<Link2 size={13} /> Link existing…
+					</button>
+				)}
+				{repo.isSymlink && (
+					<button
+						type="button"
+						className="btn small"
+						disabled={busy}
+						title="Remove the symlink. The linked folder itself is left alone."
+						onClick={onUnlink}
+					>
+						<Link2Off size={13} /> Unlink
+					</button>
+				)}
 				<button
 					type="button"
 					className="btn small"
+					disabled={!repo.exists}
 					onClick={() => void api.revealPath(repo.path)}
 				>
 					Show in Finder
@@ -260,6 +345,19 @@ export function NewSessionView() {
 	const [health, setHealth] = useState<WorkspaceHealth | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [experimentPickerOpen, setExperimentPickerOpen] = useState(false);
+	/** Repo name currently cloning, linking, or unlinking (one at a time). */
+	const [busyRepo, setBusyRepo] = useState<string | null>(null);
+	const [cloningRepo, setCloningRepo] = useState<string | null>(null);
+	const [cloneProgress, setCloneProgress] = useState("");
+
+	const refresh = useCallback(async () => {
+		setLoading(true);
+		try {
+			setHealth(await api.getWorkspaceHealth());
+		} finally {
+			setLoading(false);
+		}
+	}, []);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -276,6 +374,82 @@ export function NewSessionView() {
 			cancelled = true;
 		};
 	}, [workspaceRoot]);
+
+	useEffect(
+		() =>
+			api.onWorkspaceProgress(({ name, message }) => {
+				if (name === cloningRepo) setCloneProgress(message);
+			}),
+		[cloningRepo],
+	);
+
+	const runRepoAction = useCallback(
+		async (
+			name: string,
+			action: () => Promise<WorkspaceHealth | null>,
+			success?: (health: WorkspaceHealth) => string,
+		) => {
+			if (busyRepo) return;
+			setBusyRepo(name);
+			try {
+				const next = await action();
+				if (next) {
+					setHealth(next);
+					if (success) toast("info", success(next));
+				}
+			} catch (error) {
+				toast("error", errorMessage(error));
+			} finally {
+				setBusyRepo(null);
+			}
+		},
+		[busyRepo],
+	);
+
+	const cloneRepo = useCallback(
+		(name: string) => {
+			setCloningRepo(name);
+			setCloneProgress("");
+			void runRepoAction(
+				name,
+				() => api.cloneWorkspaceRepo(name),
+				() => `Cloned ${name} into the workspace.`,
+			).finally(() => {
+				setCloningRepo(null);
+				setCloneProgress("");
+			});
+		},
+		[runRepoAction],
+	);
+
+	const linkRepo = useCallback(
+		(name: string) => {
+			void runRepoAction(name, async () => {
+				const next = await api.linkWorkspaceRepo(name);
+				return next;
+			});
+		},
+		[runRepoAction],
+	);
+
+	const unlinkRepo = useCallback(
+		(name: string) => {
+			void runRepoAction(
+				name,
+				() => api.unlinkWorkspaceRepo(name),
+				() => `Unlinked ${name}. The original folder was left in place.`,
+			);
+		},
+		[runRepoAction],
+	);
+
+	const linkExistingProject = useCallback(() => {
+		void runRepoAction(
+			"__link-existing__",
+			() => api.linkExistingProject(),
+			() => "Linked the folder into your workspace.",
+		);
+	}, [runRepoAction]);
 
 	const primaryRepo = health?.repos.find((repo) => repo.name === "cosmos-ai");
 	const readyRepos =
@@ -330,21 +504,20 @@ export function NewSessionView() {
 					<button
 						type="button"
 						className="btn"
-						onClick={() => useStore.setState({ settingsPane: "general" })}
+						disabled={busyRepo !== null}
+						title="Symlink a project from anywhere on disk into the workspace root"
+						onClick={linkExistingProject}
 					>
-						<Settings2 size={14} /> Settings
+						<Link2 size={14} /> Link existing…
 					</button>
 					<button
 						type="button"
 						className="btn"
-						onClick={() => {
-							setLoading(true);
-							void api
-								.getWorkspaceHealth()
-								.then((next) => setHealth(next))
-								.finally(() => setLoading(false));
-						}}
+						onClick={() => useStore.setState({ settingsPane: "general" })}
 					>
+						<Settings2 size={14} /> Settings
+					</button>
+					<button type="button" className="btn" onClick={() => void refresh()}>
 						<RefreshCw size={14} /> Refresh
 					</button>
 				</div>
@@ -372,8 +545,8 @@ export function NewSessionView() {
 					)}
 					{health && health.rootExists && readyRepos.length === 0 && (
 						<div className="muted" style={{ textAlign: "left" }}>
-							No ready repositories were found yet. Clone your company repos into this
-							workspace root, then press Refresh.
+							No ready repositories were found yet. Use Clone on a card below to
+							fetch one, or Link existing… to point at a checkout you already have.
 						</div>
 					)}
 				</div>
@@ -383,7 +556,18 @@ export function NewSessionView() {
 							<div className="workspace-section-label">Company repos</div>
 							<div className="repo-card-grid">
 								{health.repos.map((repo) => (
-									<RepoCard key={repo.name} repo={repo} home={home} kind="core" />
+									<RepoCard
+										key={repo.name}
+										repo={repo}
+										home={home}
+										kind="core"
+										cloning={cloningRepo === repo.name}
+										progress={cloningRepo === repo.name ? cloneProgress : ""}
+										busy={busyRepo !== null}
+										onClone={() => cloneRepo(repo.name)}
+										onLink={() => linkRepo(repo.name)}
+										onUnlink={() => unlinkRepo(repo.name)}
+									/>
 								))}
 							</div>
 						</div>
@@ -393,18 +577,30 @@ export function NewSessionView() {
 							</div>
 							<div className="workspace-section-copy muted">
 								Sibling folders under the workspace root are treated as experiments and
-								still inherit the same shared Cosmos + Glayvin runtime context.
+								still inherit the same shared Cosmos + Glayvin runtime context. Link
+								existing… symlinks a project from anywhere on disk into this list.
 							</div>
 							{experimentProjects.length > 0 ? (
 								<div className="repo-card-grid">
 									{experimentProjects.map((repo) => (
-										<RepoCard key={repo.name} repo={repo} home={home} kind="experiment" />
+										<RepoCard
+											key={repo.name}
+											repo={repo}
+											home={home}
+											kind="experiment"
+											cloning={false}
+											progress=""
+											busy={busyRepo !== null}
+											onClone={() => cloneRepo(repo.name)}
+											onLink={() => linkRepo(repo.name)}
+											onUnlink={() => unlinkRepo(repo.name)}
+										/>
 									))}
 								</div>
 							) : (
 								<div className="muted" style={{ textAlign: "left" }}>
 									No experiment folders detected yet. Create or clone a sibling project
-									in this workspace root, or use Open experiment… to jump into one.
+									in this workspace root, or use Link existing… to symlink one in.
 								</div>
 							)}
 						</div>
