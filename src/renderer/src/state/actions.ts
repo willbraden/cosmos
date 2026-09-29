@@ -297,9 +297,28 @@ export async function chooseFolderAndStart(): Promise<void> {
 	if (folder) await startNewSession(folder);
 }
 
-export function showWorkspaceDashboard(): void {
+export function showHome(): void {
 	useStore.setState({ activeTabId: null, pendingNewSession: true });
 	api.setVisibleSession(null);
+}
+
+/** Home composer: open a fresh session in `cwd` and send `prompt` as its first message. */
+export async function startSessionWithPrompt(
+	cwd: string,
+	prompt: string,
+): Promise<void> {
+	const text = prompt.trim();
+	if (!text) return;
+	const tabId = await startFreshSession(cwd);
+	if (!tabId) return;
+	const { settings, models } = useStore.getState();
+	const preferred = settings.defaultModel;
+	const model = preferred
+		? models.find((m) => m.provider === preferred.provider && m.id === preferred.id)
+		: undefined;
+	if (model && getTab(tabId)?.model?.id !== model.id) await setModel(tabId, model);
+	setDraft(tabId, text);
+	await sendDraft(tabId);
 }
 
 async function createTab(

@@ -8,8 +8,8 @@ import {
 import {
 	ChevronRight,
 	Folder,
-	FolderPlus,
 	GitFork,
+	House,
 	PanelLeftClose,
 	Pin,
 	Plus,
@@ -35,7 +35,7 @@ import {
 	openExistingSession,
 	renameSessionByPath,
 	runSearch,
-	showWorkspaceDashboard,
+	showHome,
 	startNewSession,
 	tabForSession,
 	togglePin,
@@ -368,6 +368,7 @@ export function Sidebar() {
 	const sessions = useStore((s) => s.sessions);
 	const tabs = useStore((s) => s.tabs);
 	const activeTabId = useStore((s) => s.activeTabId);
+	const homeActive = activeTabId === null;
 	const [workspaceHealth, setWorkspaceHealth] = useState<WorkspaceHealth | null>(null);
 	const pinnedPaths = settings.pinnedSessions ?? [];
 	const sidebarSessionOrder = settings.sidebarSessionOrder ?? {};
@@ -600,6 +601,14 @@ export function Sidebar() {
 				</div>
 				<button
 					type="button"
+					className={`sidebar-nav-btn${homeActive ? " active" : ""}`}
+					aria-current={homeActive ? "page" : undefined}
+					onClick={() => showHome()}
+				>
+					<House size={15} /> Home
+				</button>
+				<button
+					type="button"
 					className="new-session-btn"
 					onClick={() => void startNewSession(activeTab()?.cwd)}
 				>
@@ -688,13 +697,6 @@ export function Sidebar() {
 					<Settings size={16} />
 				</button>
 				<span className="spacer" />
-				<button
-					type="button"
-					className="btn small"
-					onClick={() => showWorkspaceDashboard()}
-				>
-					<FolderPlus size={13} /> Workspace repos
-				</button>
 			</div>
 		</nav>
 	);

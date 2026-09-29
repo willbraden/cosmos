@@ -26,18 +26,22 @@ export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, on
 	}, [ref, open, onClose]);
 }
 
-function Dropdown({
+export function Dropdown({
 	trigger,
 	title,
 	children,
 	align = "left",
 	width,
+	direction = "up",
+	className = "chip",
 }: {
 	trigger: ReactNode;
 	title: string;
 	children: (close: () => void) => ReactNode;
 	align?: "left" | "right";
 	width?: number;
+	direction?: "up" | "down";
+	className?: string;
 }) {
 	const [open, setOpen] = useState(false);
 	const ref = useRef<HTMLDivElement>(null);
@@ -45,12 +49,12 @@ function Dropdown({
 	useDismiss(ref, open, close);
 	return (
 		<div ref={ref} style={{ position: "relative" }}>
-			<button type="button" className="chip" title={title} onClick={() => setOpen(!open)} aria-expanded={open}>
+			<button type="button" className={className} title={title} onClick={() => setOpen(!open)} aria-expanded={open}>
 				{trigger}
 				<ChevronDown size={12} />
 			</button>
 			{open && (
-				<div className="popover up" style={{ [align]: 0, width }}>
+				<div className={`popover ${direction}`} style={{ [align]: 0, width }}>
 					{children(close)}
 				</div>
 			)}
