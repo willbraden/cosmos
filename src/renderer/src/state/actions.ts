@@ -173,9 +173,23 @@ export function applyTheme(theme: "system" | "light" | "dark"): void {
 	else document.documentElement.dataset.theme = theme;
 }
 
+/**
+ * Sessions hidden from the sidebar before the on-disk index catches up. The index
+ * rescans every session file behind a debounce, so a trashed row would otherwise linger
+ * for seconds. Each path clears itself once a refresh confirms it is gone.
+ */
+const trashedSessionPaths = new Set<string>();
+
 export async function refreshSessions(): Promise<void> {
 	try {
-		const sessions = await api.listSessions();
+		const listed = await api.listSessions();
+		for (const path of trashedSessionPaths) {
+			if (!listed.some((session) => session.path === path))
+				trashedSessionPaths.delete(path);
+		}
+		const sessions = listed.filter(
+			(session) => !trashedSessionPaths.has(session.path),
+		);
 		useStore.setState({ sessions, sessionsLoaded: true });
 		const query = useStore.getState().searchQuery;
 		if (query.trim()) await runSearch(query);
@@ -1143,7 +1157,15 @@ async function showStats(tabId: string): Promise<void> {
 }
 
 export async function deleteSession(sessionPath: string): Promise<void> {
+	// Drop the row now. Waiting for the pi process to exit and for the on-disk index to
+	// rescan every session file leaves it sitting there for seconds.
+	trashedSessionPaths.add(sessionPath);
+	useStore.setState((state) => ({
+		sessions: state.sessions.filter((s) => s.path !== sessionPath),
+	}));
 	const tab = tabForSession(sessionPath);
+	// Still shut the process down before trashing, so pi cannot append to (and recreate)
+	// the session file afterwards. The sidebar no longer waits on it.
 	if (tab) await closeTab(tab.tabId);
 	try {
 		await api.deleteSession(sessionPath);
@@ -1154,6 +1176,8 @@ export async function deleteSession(sessionPath: string): Promise<void> {
 			});
 		toast("info", "Session moved to the Trash.");
 	} catch (error) {
+		trashedSessionPaths.delete(sessionPath);
+		void refreshSessions();
 		toast("error", errorMessage(error));
 	}
 }
