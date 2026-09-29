@@ -30,6 +30,7 @@ import { extractReportedActiveTools } from "../src/main/mcp-session-availability
 import { encodeJsonl, JsonlDecoder } from "../src/main/pi/jsonl";
 import { sanitizeSettingsPatch } from "../src/main/settings";
 import { parseEnvOutput } from "../src/main/shell-env";
+import { supervisorBuildId } from "../src/main/supervisor-identity";
 import {
 	PERMISSION_MODE_COMMAND,
 	PERMISSION_OPTIONS,
@@ -419,5 +420,27 @@ describe("fuzzy file matching", () => {
 		expect(b).toBeNull();
 		const c = fuzzyScore("b/u/t/t/o/n/index.ts", "button") ?? -Infinity;
 		expect(a).toBeGreaterThan(c);
+	});
+});
+
+describe("supervisor build id", () => {
+	it("tracks the chunks the entry imports and ignores unrelated siblings", () => {
+		const dir = mkdtempSync(join(tmpdir(), "cosmos-build-"));
+		mkdirSync(join(dir, "chunks"));
+		const entry = join(dir, "session-supervisor.js");
+		const chunk = join(dir, "chunks", "shared-abc123.js");
+		writeFileSync(entry, 'import { a } from "./chunks/shared-abc123.js";\nconsole.log(a);\n');
+		writeFileSync(chunk, "export const a = 1;\n");
+		writeFileSync(join(dir, "index.js"), "console.log('unrelated');\n");
+
+		const first = supervisorBuildId(entry);
+		expect(supervisorBuildId(entry)).toBe(first);
+
+		// The main-process bundle is not part of the supervisor's graph.
+		writeFileSync(join(dir, "index.js"), "console.log('unrelated, but changed');\n");
+		expect(supervisorBuildId(entry)).toBe(first);
+
+		writeFileSync(chunk, "export const a = 2;\n");
+		expect(supervisorBuildId(entry)).not.toBe(first);
 	});
 });

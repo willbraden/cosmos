@@ -17,7 +17,17 @@ export interface SupervisorConfig {
 	glayvinHome?: string;
 }
 
+/** Identifies the process answering the socket, so clients can detect a supervisor from another build. */
+export interface SupervisorIdentity {
+	buildId: string;
+	pid: number;
+	entryPath: string;
+	startedAt: number;
+}
+
 export type SupervisorMethod =
+	| { method: "hello" }
+	| { method: "shutdown" }
 	| { method: "configure"; config: SupervisorConfig }
 	| { method: "getSnapshot" }
 	| { method: "open"; request: OpenSessionRequest }
@@ -51,3 +61,8 @@ export type SupervisorMessage =
 	| SupervisorEvent;
 
 export interface SnapshotResponse extends LiveSessionState {}
+
+/** Sidecar file holding the listening supervisor's pid, so a stale one can be replaced if it stops answering. */
+export function supervisorPidFilePath(socketPath: string): string {
+	return `${socketPath}.pid`;
+}
