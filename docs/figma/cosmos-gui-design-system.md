@@ -625,7 +625,7 @@ Real elements seen in code/CSS:
 - `.empty-chat-actions`
 - `.empty-chat-action`
 - `.welcome-card`
-- Home cards like `.home-panel`, `.home-suggestion`, `.repo-card`
+- Home cards like `.home-suggestion`, `.repo-card`
 
 ### 22. Toast
 

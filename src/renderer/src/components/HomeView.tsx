@@ -1,9 +1,4 @@
-import type {
-	ModelRef,
-	SessionSummary,
-	WorkspaceHealth,
-	WorkspaceRepoHealth,
-} from "@shared/ipc";
+import type { ModelRef, WorkspaceHealth, WorkspaceRepoHealth } from "@shared/ipc";
 import type { Model } from "@shared/pi-types";
 import {
 	ArrowUp,
@@ -25,13 +20,9 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { api, basename, errorMessage, relativeTime, tildify } from "../lib/api";
-import {
-	openExistingSession,
-	startNewSession,
-	startSessionWithPrompt,
-} from "../state/actions";
-import { sessionTitle, useStore } from "../state/store";
+import { api, basename, errorMessage, tildify } from "../lib/api";
+import { startNewSession, startSessionWithPrompt } from "../state/actions";
+import { useStore } from "../state/store";
 import { CosmosMark } from "./CosmosMark";
 import { Dropdown, PERMISSION_MODES } from "./Pickers";
 
@@ -411,7 +402,6 @@ export function HomeView() {
 	const home = useStore((s) => s.appInfo?.homeDir);
 	const workspaceRoot = useStore((s) => s.appInfo?.workspaceRoot);
 	const collapsed = useStore((s) => s.settings.sidebarCollapsed);
-	const sessions = useStore((s) => s.sessions);
 	const [health, setHealth] = useState<WorkspaceHealth | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [newExperimentOpen, setNewExperimentOpen] = useState(false);
@@ -505,11 +495,6 @@ export function HomeView() {
 		const next = fallback?.path ?? recent[0];
 		if (next) setCwd(next);
 	}, [repoOptions, recent, cwd]);
-
-	const recentSessions = useMemo(
-		() => [...sessions].sort((a, b) => b.modified - a.modified).slice(0, 5),
-		[sessions],
-	);
 
 	const canSend = prompt.trim().length > 0 && Boolean(cwd) && !starting;
 
@@ -606,44 +591,6 @@ export function HomeView() {
 							</button>
 						))}
 					</div>
-
-					<section className="home-section">
-						<div className="home-section-head">
-							<div>
-								<h2>Up next</h2>
-								<p className="muted">Recently updated sessions across your projects.</p>
-							</div>
-						</div>
-						<div className="home-panel">
-							{recentSessions.length > 0 ? (
-								<div className="home-session-list">
-									{recentSessions.map((summary: SessionSummary) => (
-										<button
-											key={summary.path}
-											type="button"
-											className="home-session-row"
-											onClick={() => void openExistingSession(summary.path, summary.cwd)}
-										>
-											<span className="home-session-title">
-												{sessionTitle(summary)}
-											</span>
-											<span className="home-session-meta">
-												{basename(summary.cwd)} · {relativeTime(summary.modified)}
-											</span>
-										</button>
-									))}
-								</div>
-							) : (
-								<div className="home-panel-empty">
-									<Check size={18} />
-									<strong>You're all caught up</strong>
-									<span className="muted">
-										Sessions you start will show up here.
-									</span>
-								</div>
-							)}
-						</div>
-					</section>
 
 					<section className="home-section">
 						<div className="home-section-head">

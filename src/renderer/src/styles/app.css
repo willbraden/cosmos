@@ -2506,56 +2506,6 @@ select {
 	flex-wrap: wrap;
 }
 
-.home-panel {
-	border: 1px solid var(--color-border-neutral-subtle);
-	border-radius: 14px;
-	background: color-mix(in srgb, var(--color-background-neutral-default-normal-idle) 92%, transparent);
-	padding: 6px;
-}
-
-.home-panel-empty {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 6px;
-	padding: 36px 16px;
-	text-align: center;
-	color: var(--color-foreground-neutral-default-subtle);
-}
-
-.home-session-list {
-	display: grid;
-}
-
-.home-session-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 16px;
-	width: 100%;
-	padding: 9px 10px;
-	border-radius: 9px;
-	text-align: left;
-}
-
-.home-session-row:hover {
-	background: var(--color-background-neutral-default-subtle-hover);
-}
-
-.home-session-title {
-	font-size: 13.5px;
-	color: var(--color-foreground-neutral-default-strong);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.home-session-meta {
-	flex-shrink: 0;
-	font-size: 12px;
-	color: var(--color-foreground-neutral-default-subtle);
-}
-
 .home-new-experiment {
 	display: grid;
 	gap: 12px;
