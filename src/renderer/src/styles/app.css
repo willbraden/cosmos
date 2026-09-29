@@ -265,7 +265,12 @@ select {
 	font-weight: var(--typography-label-normal-default-sm-font-weight);
 	line-height: var(--typography-label-normal-default-sm-line-height);
 	white-space: nowrap;
-	max-width: 260px;
+	min-width: 0;
+	max-width: min(260px, 100%);
+}
+
+.chip > svg {
+	flex-shrink: 0;
 }
 
 .chip:hover {
@@ -276,6 +281,14 @@ select {
 .chip span {
 	overflow: hidden;
 	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.dropdown {
+	position: relative;
+	min-width: 0;
+	flex-shrink: 1;
 }
 
 .kbd {
@@ -1323,7 +1336,8 @@ select {
 
 .composer-wrap {
 	flex-shrink: 0;
-	padding: 0 28px 14px;
+	padding: 0 clamp(12px, 4%, 28px) 14px;
+	min-width: 0;
 }
 
 .composer-wrap.centered {
@@ -1335,6 +1349,7 @@ select {
 	max-width: 780px;
 	margin: 0 auto;
 	position: relative;
+	min-width: 0;
 }
 
 .composer {
@@ -1384,6 +1399,22 @@ select {
 	align-items: center;
 	gap: 2px;
 	padding: 6px 8px 8px;
+	min-width: 0;
+}
+
+/* Toolbar items shrink (and truncate) instead of spilling past the rounded box. */
+.composer-toolbar > * {
+	min-width: 0;
+}
+
+/* Icons-only toolbar once the composer is too narrow for labels. */
+.composer-inner.compact .chip-label {
+	display: none;
+}
+
+.composer-inner.compact .chip {
+	padding: 0 6px;
+	gap: 3px;
 }
 
 .send-btn {
@@ -1397,6 +1428,7 @@ select {
 	background: var(--color-background-brand-default-strong-idle);
 	color: var(--app-foreground-on-brand-strong);
 	margin-left: 4px;
+	flex-shrink: 0;
 }
 
 .send-btn:hover {
@@ -1466,6 +1498,9 @@ select {
 
 .composer-hint > span {
 	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .composer-status {
@@ -1523,7 +1558,8 @@ select {
 	border-radius: 12px;
 	box-shadow: var(--shadow-float);
 	padding: 5px;
-	min-width: 220px;
+	min-width: min(220px, calc(100vw - 24px));
+	max-width: calc(100vw - 24px);
 	max-height: 360px;
 	overflow-y: auto;
 }
