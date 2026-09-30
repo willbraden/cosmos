@@ -55,6 +55,7 @@ import {
 	cloneWorkspaceRepo,
 	coreRepoCloneUrl,
 	inspectWorkspace,
+	isCoreRepoName,
 	linkWorkspaceRepo,
 	cloneFailureMessage,
 	lastMeaningfulLine,
@@ -528,13 +529,13 @@ describe("workspace repos", () => {
 	}
 
 	it("builds core clone URLs from the default org and a valid override", () => {
-		expect(coreRepoCloneUrl("nebula")).toBe("git@github.com:shipt/nebula.git");
-		expect(coreRepoCloneUrl("nebula", "acme-co")).toBe(
-			"git@github.com:acme-co/nebula.git",
+		expect(coreRepoCloneUrl("neutron")).toBe("git@github.com:shipt/neutron.git");
+		expect(coreRepoCloneUrl("neutron", "acme-co")).toBe(
+			"git@github.com:acme-co/neutron.git",
 		);
 		// Junk orgs fall back rather than producing a broken or injected URL.
-		expect(coreRepoCloneUrl("nebula", "bad org/../x")).toBe(
-			"git@github.com:shipt/nebula.git",
+		expect(coreRepoCloneUrl("neutron", "bad org/../x")).toBe(
+			"git@github.com:shipt/neutron.git",
 		);
 	});
 
@@ -550,13 +551,13 @@ describe("workspace repos", () => {
 		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
 		mkdirSync(join(external, ".git"), { recursive: true });
 
-		linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: external });
+		linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: external });
 		const health = inspectWorkspace(root);
-		const nebula = health.repos.find((repo) => repo.name === "nebula");
+		const neutron = health.repos.find((repo) => repo.name === "neutron");
 
-		expect(nebula?.isSymlink).toBe(true);
-		expect(nebula?.linkTarget).toBe(external);
-		expect(nebula?.isGitRepo).toBe(true);
+		expect(neutron?.isSymlink).toBe(true);
+		expect(neutron?.linkTarget).toBe(external);
+		expect(neutron?.isGitRepo).toBe(true);
 		expect(health.readyRepos).toBe(1);
 	});
 
@@ -570,10 +571,10 @@ describe("workspace repos", () => {
 			linkWorkspaceRepo({ rootPath: root, name: "already-here", targetPath: external }),
 		).toThrow(/already exists/);
 		expect(() =>
-			linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: inside }),
+			linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: inside }),
 		).toThrow(/already inside/);
 		expect(() =>
-			linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: join(external, "nope") }),
+			linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: join(external, "nope") }),
 		).toThrow(/not a folder/);
 	});
 
@@ -581,11 +582,11 @@ describe("workspace repos", () => {
 		const root = workspace();
 		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
 		writeFileSync(join(external, "keep.txt"), "keep me");
-		linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: external });
+		linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: external });
 		mkdirSync(join(root, "real-thing"), { recursive: true });
 
-		unlinkWorkspaceRepo(root, "nebula");
-		expect(existsSync(join(root, "nebula"))).toBe(false);
+		unlinkWorkspaceRepo(root, "neutron");
+		expect(existsSync(join(root, "neutron"))).toBe(false);
 		expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("keep me");
 
 		expect(() => unlinkWorkspaceRepo(root, "real-thing")).toThrow(/real folder/);
@@ -596,7 +597,7 @@ describe("workspace repos", () => {
 		const root = workspace();
 		const origin = mkdtempSync(join(tmpdir(), "cosmos-origin-"));
 		execFileSync("git", ["init", "--quiet", "--initial-branch=main", origin]);
-		writeFileSync(join(origin, "README.md"), "# nebula\n");
+		writeFileSync(join(origin, "README.md"), "# neutron\n");
 		const gitEnv = {
 			...process.env,
 			GIT_AUTHOR_NAME: "Test",
@@ -612,17 +613,17 @@ describe("workspace repos", () => {
 		const progress: string[] = [];
 		const target = await cloneWorkspaceRepo({
 			rootPath: root,
-			name: "nebula",
+			name: "neutron",
 			url: `file://${origin}`,
 			onProgress: (message) => progress.push(message),
 		});
 
-		expect(target).toBe(join(root, "nebula"));
-		expect(readFileSync(join(target, "README.md"), "utf8")).toBe("# nebula\n");
+		expect(target).toBe(join(root, "neutron"));
+		expect(readFileSync(join(target, "README.md"), "utf8")).toBe("# neutron\n");
 		expect(inspectWorkspace(root).readyRepos).toBe(1);
 		expect(progress.length).toBeGreaterThan(0);
 		// Staging directories must not survive a successful clone.
-		expect(readdirSync(root)).toEqual(["nebula"]);
+		expect(readdirSync(root)).toEqual(["neutron"]);
 	});
 
 	it("leaves no directory behind when a clone fails", async () => {
@@ -630,11 +631,11 @@ describe("workspace repos", () => {
 		await expect(
 			cloneWorkspaceRepo({
 				rootPath: root,
-				name: "nebula",
+				name: "neutron",
 				url: `file://${join(tmpdir(), "cosmos-missing-origin")}`,
 			}),
 		).rejects.toThrow();
-		expect(existsSync(join(root, "nebula"))).toBe(false);
+		expect(existsSync(join(root, "neutron"))).toBe(false);
 		expect(readdirSync(root)).toEqual([]);
 	});
 
@@ -643,7 +644,7 @@ describe("workspace repos", () => {
 		await expect(
 			cloneWorkspaceRepo({
 				rootPath: root,
-				name: "nebula",
+				name: "neutron",
 				url: "--upload-pack=touch /tmp/pwned",
 			}),
 		).rejects.toThrow(/git@/);
@@ -743,19 +744,19 @@ describe("clone failure reporting", () => {
 
 	it("ignores progress chatter when picking the failure line", () => {
 		const output = [
-			"Cloning into 'nebula'...",
+			"Cloning into 'neutron'...",
 			"remote: Enumerating objects: 120, done.",
 			"Receiving objects:  100% (120/120), done.",
-			"fatal: destination path 'nebula' already exists and is not an empty directory.",
+			"fatal: destination path 'neutron' already exists and is not an empty directory.",
 		].join("\n");
 		expect(lastMeaningfulLine(output)).toBe(
-			"fatal: destination path 'nebula' already exists and is not an empty directory.",
+			"fatal: destination path 'neutron' already exists and is not an empty directory.",
 		);
 	});
 });
 
 describe("clone failure context", () => {
-	const url = "git@github.com:shipt/nebula.git";
+	const url = "git@github.com:shipt/neutron.git";
 
 	it("names the org that was tried, which the card never shows", () => {
 		expect(cloneFailureMessage("Repository not found.", url, 128)).toBe(
@@ -771,5 +772,23 @@ describe("clone failure context", () => {
 	it("falls back to the exit code when git printed nothing usable", () => {
 		expect(cloneFailureMessage("", url, 128)).toBe("git clone failed (exit 128)");
 		expect(cloneFailureMessage("", url, null)).toBe("git clone failed (exit unknown)");
+	});
+});
+
+describe("core repo list", () => {
+	// shipt/nebula never existed. It sat in this list unnoticed because the list
+	// started life as folder names to look for, and only later became the source
+	// of clone URLs, where a name that is merely wrong turns into a 404.
+	it("lists repos that exist, not folder labels", () => {
+		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
+			expect(isCoreRepoName(name)).toBe(true);
+		}
+		expect(isCoreRepoName("nebula")).toBe(false);
+	});
+
+	it("builds a clone URL for every core repo", () => {
+		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
+			expect(coreRepoCloneUrl(name)).toBe(`git@github.com:shipt/${name}.git`);
+		}
 	});
 });

@@ -214,7 +214,7 @@ function General({
 			</Setting>
 			<Setting
 				name="Cosmos workspace root"
-				help="Where Cosmos expects sibling repos like cosmos-ai, segway-next, and nebula. Leave empty to use ~/Cosmos. Changing this restarts background pi processes so the company package sees the new root."
+				help="Where Cosmos expects sibling repos like cosmos-ai, segway-next, and neutron. Leave empty to use ~/Cosmos. Changing this restarts background pi processes so the company package sees the new root."
 				stacked
 			>
 				<PathSettingInput

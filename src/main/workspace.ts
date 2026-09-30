@@ -17,7 +17,12 @@ import type { WorkspaceHealth, WorkspaceRepoHealth } from "../shared/ipc";
 /** GitHub org the curated company repos live in. Overridable from Settings. */
 export const DEFAULT_CORE_REPO_ORG = "shipt";
 
-const CORE_REPOS = ["cosmos-ai", "segway-next", "nebula"] as const;
+const CORE_REPOS = [
+	"cosmos-ai",
+	"segway-next",
+	"neutron",
+	"design-system",
+] as const;
 const CORE_REPO_SET = new Set<string>(CORE_REPOS);
 
 /** Cloning a large monorepo can take minutes, so give git plenty of room. */

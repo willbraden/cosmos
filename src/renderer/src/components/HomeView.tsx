@@ -741,7 +741,7 @@ export function HomeView() {
 								<p className="muted">
 									{loading
 										? "Checking…"
-										: `${readyCount}/${coreRepos.length || 3} core repos ready · ${experiments.length} experiments`}
+										: `${readyCount}/${coreRepos.length} core repos ready · ${experiments.length} experiments`}
 									{health ? ` · ${tildify(health.rootPath, home)}` : ""}
 								</p>
 							</div>
