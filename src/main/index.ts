@@ -28,7 +28,13 @@ import {
 	shell,
 } from "electron";
 import log from "electron-log/main";
-import type { AppInfo, DesktopSettings, MenuCommand } from "../shared/ipc";
+import type {
+	AppInfo,
+	DesktopSettings,
+	MenuCommand,
+	SessionMenuAction,
+	WorkspaceHealth,
+} from "../shared/ipc";
 import {
 	ensureCosmosManagedAgentDir,
 	isCosmosManagedAgentDir,
@@ -67,7 +73,17 @@ import { SessionSupervisorClient } from "./session-supervisor-client";
 import { SettingsStore } from "./settings";
 import { resolveShellEnv } from "./shell-env";
 import { getWorktreeSupport, previewManagedWorktree } from "./worktrees";
-import { inspectWorkspace, isPathInsideWorkspace } from "./workspace";
+import {
+	assertWorkspaceEntryName,
+	cloneWorkspaceRepo,
+	coreRepoCloneUrl,
+	inspectWorkspace,
+	isCoreRepoName,
+	isPathInsideWorkspace,
+	linkWorkspaceRepo,
+	unlinkWorkspaceRepo,
+	workspaceEntryPath,
+} from "./workspace";
 
 // ---- Observability: persistent logs + local crash dumps from the first line ----
 log.initialize();
@@ -114,6 +130,39 @@ function refreshAppMenu(): void {
 
 function resolveWorkspaceRootPath(settingsValue: DesktopSettings): string {
 	return settingsValue.workspaceRootPath || join(homedir(), "Cosmos");
+}
+
+function currentWorkspaceHealth(): WorkspaceHealth {
+	const current = settings.get();
+	return inspectWorkspace(
+		resolveWorkspaceRootPath(current),
+		current.coreRepoOrg,
+	);
+}
+
+/** Repos with a clone in flight, so a double-click cannot start two of them. */
+const cloningRepos = new Set<string>();
+
+/**
+ * Folder picker for symlink targets. Unlike `dialog:pick-folder` this deliberately
+ * allows folders outside the workspace root, since the point is to link one in.
+ */
+async function pickLinkTarget(
+	event: Electron.IpcMainInvokeEvent,
+	title: string,
+): Promise<string | null> {
+	const win = BrowserWindow.fromWebContents(event.sender);
+	const options = {
+		title,
+		defaultPath: homedir(),
+		buttonLabel: "Link",
+		properties: ["openDirectory" as const],
+	};
+	const result = win
+		? await dialog.showOpenDialog(win, options)
+		: await dialog.showOpenDialog(options);
+	const chosen = result.canceled ? null : (result.filePaths[0] ?? null);
+	return chosen ? resolve(chosen) : null;
 }
 
 function sessionSupervisorSocketPath(): string {
@@ -542,9 +591,61 @@ function registerIpc(): void {
 	ipcMain.handle("settings:update", (_e, patch: unknown) =>
 		settings.update(patch),
 	);
-	ipcMain.handle("workspace:health", () =>
-		inspectWorkspace(resolveWorkspaceRootPath(settings.get())),
-	);
+	ipcMain.handle("workspace:health", () => currentWorkspaceHealth());
+	ipcMain.handle("workspace:clone-repo", async (_e, name: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(name ?? ""));
+		if (!isCoreRepoName(repoName)) {
+			throw new Error(`${repoName} is not one of the core company repos.`);
+		}
+		if (cloningRepos.has(repoName)) {
+			throw new Error(`${repoName} is already being cloned.`);
+		}
+		const current = settings.get();
+		const rootPath = resolveWorkspaceRootPath(current);
+		cloningRepos.add(repoName);
+		try {
+			send("workspace:progress", { name: repoName, message: "Starting clone…" });
+			await cloneWorkspaceRepo({
+				rootPath,
+				name: repoName,
+				url: coreRepoCloneUrl(repoName, current.coreRepoOrg),
+				env: await resolveShellEnv(),
+				onProgress: (message) =>
+					send("workspace:progress", { name: repoName, message }),
+			});
+			log.info(`Cloned ${repoName} into ${rootPath}`);
+			return currentWorkspaceHealth();
+		} finally {
+			cloningRepos.delete(repoName);
+			send("workspace:progress", { name: repoName, message: "" });
+		}
+	});
+	ipcMain.handle("workspace:link-repo", async (event, name: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(name ?? ""));
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		const targetPath = await pickLinkTarget(event, `Choose the existing ${repoName} checkout`);
+		if (!targetPath) return currentWorkspaceHealth();
+		linkWorkspaceRepo({ rootPath, name: repoName, targetPath });
+		log.info(`Linked ${rootPath}/${repoName} -> ${targetPath}`);
+		return currentWorkspaceHealth();
+	});
+	ipcMain.handle("workspace:link-existing", async (event) => {
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		const targetPath = await pickLinkTarget(
+			event,
+			"Choose an existing project folder to link into the workspace",
+		);
+		if (!targetPath) return null;
+		const name = assertWorkspaceEntryName(basename(targetPath));
+		linkWorkspaceRepo({ rootPath, name, targetPath });
+		log.info(`Linked ${rootPath}/${name} -> ${targetPath}`);
+		return currentWorkspaceHealth();
+	});
+	ipcMain.handle("workspace:unlink-repo", (_e, name: unknown) => {
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		unlinkWorkspaceRepo(rootPath, String(name ?? ""));
+		return currentWorkspaceHealth();
+	});
 	ipcMain.handle("mcp:overview", async () => {
 		const agentDir = getAgentDir();
 		const overview = await getMcpOverview(
@@ -679,31 +780,15 @@ function registerIpc(): void {
 	});
 	ipcMain.handle("workspace:create-experiment", (_event, name: unknown) => {
 		if (typeof name !== "string") throw new Error("Experiment name is required");
-		const trimmed = name.trim();
-		if (!trimmed) throw new Error("Enter an experiment name");
-		if (
-			trimmed === "." ||
-			trimmed === ".." ||
-			/[\\/]/.test(trimmed) ||
-			/[\0]/.test(trimmed)
-		) {
-			throw new Error(
-				"Use a single folder name without slashes, '..', or hidden control characters",
-			);
-		}
+		const trimmed = assertWorkspaceEntryName(name);
 		const workspaceRoot = resolveWorkspaceRootPath(settings.get());
-		const experimentPath = resolve(join(workspaceRoot, trimmed));
-		if (!isPathInsideWorkspace(experimentPath, workspaceRoot)) {
-			throw new Error(
-				`Create experiments inside ${workspaceRoot}. Cosmos is locked to the company workspace.`,
-			);
-		}
+		const experimentPath = workspaceEntryPath(workspaceRoot, trimmed);
 		if (existsSync(experimentPath)) {
 			throw new Error(
 				`A folder named ${trimmed} already exists in ${workspaceRoot}.`,
 			);
 		}
-		mkdirSync(experimentPath, { recursive: false });
+		mkdirSync(experimentPath, { recursive: true });
 		return experimentPath;
 	});
 	ipcMain.handle("dialog:save", async (event, defaultName: unknown) => {

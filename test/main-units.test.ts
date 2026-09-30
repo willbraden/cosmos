@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+	existsSync,
+	mkdtempSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -36,6 +44,14 @@ import { extractReportedActiveTools } from "../src/main/mcp-session-availability
 import { encodeJsonl, JsonlDecoder } from "../src/main/pi/jsonl";
 import { sanitizeSettingsPatch } from "../src/main/settings";
 import { parseEnvOutput } from "../src/main/shell-env";
+import {
+	assertWorkspaceEntryName,
+	cloneWorkspaceRepo,
+	coreRepoCloneUrl,
+	inspectWorkspace,
+	linkWorkspaceRepo,
+	unlinkWorkspaceRepo,
+} from "../src/main/workspace";
 import {
 	PERMISSION_OPTIONS,
 	PERMISSION_PROMPT_MARKER,
@@ -467,5 +483,133 @@ describe("fuzzy file matching", () => {
 		expect(b).toBeNull();
 		const c = fuzzyScore("b/u/t/t/o/n/index.ts", "button") ?? -Infinity;
 		expect(a).toBeGreaterThan(c);
+	});
+});
+
+describe("workspace repos", () => {
+	function workspace(): string {
+		return mkdtempSync(join(tmpdir(), "cosmos-workspace-"));
+	}
+
+	it("builds core clone URLs from the default org and a valid override", () => {
+		expect(coreRepoCloneUrl("nebula")).toBe("git@github.com:shipt/nebula.git");
+		expect(coreRepoCloneUrl("nebula", "acme-co")).toBe(
+			"git@github.com:acme-co/nebula.git",
+		);
+		// Junk orgs fall back rather than producing a broken or injected URL.
+		expect(coreRepoCloneUrl("nebula", "bad org/../x")).toBe(
+			"git@github.com:shipt/nebula.git",
+		);
+	});
+
+	it("rejects entry names that escape the workspace root", () => {
+		for (const name of ["..", ".", "a/b", "../evil", ".hidden", "  ", "a\u0000b"]) {
+			expect(() => assertWorkspaceEntryName(name)).toThrow();
+		}
+		expect(assertWorkspaceEntryName("  cosmos-ai ")).toBe("cosmos-ai");
+	});
+
+	it("reports symlinked checkouts as linked, ready repos", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		mkdirSync(join(external, ".git"), { recursive: true });
+
+		linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: external });
+		const health = inspectWorkspace(root);
+		const nebula = health.repos.find((repo) => repo.name === "nebula");
+
+		expect(nebula?.isSymlink).toBe(true);
+		expect(nebula?.linkTarget).toBe(external);
+		expect(nebula?.isGitRepo).toBe(true);
+		expect(health.readyRepos).toBe(1);
+	});
+
+	it("refuses to link over an existing entry or from inside the workspace", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		const inside = join(root, "already-here");
+		mkdirSync(inside, { recursive: true });
+
+		expect(() =>
+			linkWorkspaceRepo({ rootPath: root, name: "already-here", targetPath: external }),
+		).toThrow(/already exists/);
+		expect(() =>
+			linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: inside }),
+		).toThrow(/already inside/);
+		expect(() =>
+			linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: join(external, "nope") }),
+		).toThrow(/not a folder/);
+	});
+
+	it("unlinks symlinks but never deletes a real folder", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		writeFileSync(join(external, "keep.txt"), "keep me");
+		linkWorkspaceRepo({ rootPath: root, name: "nebula", targetPath: external });
+		mkdirSync(join(root, "real-thing"), { recursive: true });
+
+		unlinkWorkspaceRepo(root, "nebula");
+		expect(existsSync(join(root, "nebula"))).toBe(false);
+		expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("keep me");
+
+		expect(() => unlinkWorkspaceRepo(root, "real-thing")).toThrow(/real folder/);
+		expect(existsSync(join(root, "real-thing"))).toBe(true);
+	});
+
+	it("clones a repo into the workspace root and streams progress", async () => {
+		const root = workspace();
+		const origin = mkdtempSync(join(tmpdir(), "cosmos-origin-"));
+		execFileSync("git", ["init", "--quiet", "--initial-branch=main", origin]);
+		writeFileSync(join(origin, "README.md"), "# nebula\n");
+		const gitEnv = {
+			...process.env,
+			GIT_AUTHOR_NAME: "Test",
+			GIT_AUTHOR_EMAIL: "test@example.com",
+			GIT_COMMITTER_NAME: "Test",
+			GIT_COMMITTER_EMAIL: "test@example.com",
+		};
+		execFileSync("git", ["-C", origin, "add", "."], { env: gitEnv });
+		execFileSync("git", ["-C", origin, "commit", "--quiet", "-m", "init"], {
+			env: gitEnv,
+		});
+
+		const progress: string[] = [];
+		const target = await cloneWorkspaceRepo({
+			rootPath: root,
+			name: "nebula",
+			url: `file://${origin}`,
+			onProgress: (message) => progress.push(message),
+		});
+
+		expect(target).toBe(join(root, "nebula"));
+		expect(readFileSync(join(target, "README.md"), "utf8")).toBe("# nebula\n");
+		expect(inspectWorkspace(root).readyRepos).toBe(1);
+		expect(progress.length).toBeGreaterThan(0);
+		// Staging directories must not survive a successful clone.
+		expect(readdirSync(root)).toEqual(["nebula"]);
+	});
+
+	it("leaves no directory behind when a clone fails", async () => {
+		const root = workspace();
+		await expect(
+			cloneWorkspaceRepo({
+				rootPath: root,
+				name: "nebula",
+				url: `file://${join(tmpdir(), "cosmos-missing-origin")}`,
+			}),
+		).rejects.toThrow();
+		expect(existsSync(join(root, "nebula"))).toBe(false);
+		expect(readdirSync(root)).toEqual([]);
+	});
+
+	it("rejects clone URLs that are not recognised git transports", async () => {
+		const root = workspace();
+		await expect(
+			cloneWorkspaceRepo({
+				rootPath: root,
+				name: "nebula",
+				url: "--upload-pack=touch /tmp/pwned",
+			}),
+		).rejects.toThrow(/git@/);
 	});
 });

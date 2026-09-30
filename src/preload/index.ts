@@ -19,6 +19,11 @@ const api: DesktopApi = {
 	getSettings: () => ipcRenderer.invoke("settings:get"),
 	updateSettings: (patch) => ipcRenderer.invoke("settings:update", patch),
 	getWorkspaceHealth: () => ipcRenderer.invoke("workspace:health"),
+	cloneWorkspaceRepo: (name) => ipcRenderer.invoke("workspace:clone-repo", name),
+	linkWorkspaceRepo: (name) => ipcRenderer.invoke("workspace:link-repo", name),
+	linkExistingProject: () => ipcRenderer.invoke("workspace:link-existing"),
+	unlinkWorkspaceRepo: (name) =>
+		ipcRenderer.invoke("workspace:unlink-repo", name),
 	getMcpOverview: () => ipcRenderer.invoke("mcp:overview"),
 	getFigmaXcodeAuthStatus: () => ipcRenderer.invoke("figma:xcode-status"),
 	launchFigmaXcodePluginInstall: () =>
@@ -85,6 +90,7 @@ const api: DesktopApi = {
 	onSessionEvents: subscribe("session:events"),
 	onSessionExit: subscribe("session:exit"),
 	onSessionsChanged: subscribe("sessions:changed"),
+	onWorkspaceProgress: subscribe("workspace:progress"),
 	onAuthEvent: subscribe("auth:event"),
 	onAuthPrompt: subscribe("auth:prompt"),
 	onAuthChanged: subscribe("auth:changed"),

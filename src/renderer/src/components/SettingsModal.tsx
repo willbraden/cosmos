@@ -159,6 +159,7 @@ function General({
 	const [workspaceRootPath, setWorkspaceRootPath] = useState(
 		settings.workspaceRootPath,
 	);
+	const [coreRepoOrg, setCoreRepoOrg] = useState(settings.coreRepoOrg);
 	const [showAdvanced, setShowAdvanced] = useState(false);
 
 	useEffect(() => {
@@ -166,11 +167,13 @@ function General({
 		setAgentDirPath(settings.agentDirPath);
 		setGlayvinHomePath(settings.glayvinHomePath);
 		setWorkspaceRootPath(settings.workspaceRootPath);
+		setCoreRepoOrg(settings.coreRepoOrg);
 	}, [
 		settings.piCliPath,
 		settings.agentDirPath,
 		settings.glayvinHomePath,
 		settings.workspaceRootPath,
+		settings.coreRepoOrg,
 	]);
 
 	useEffect(() => {
@@ -220,6 +223,26 @@ function General({
 					width={320}
 					onChange={setWorkspaceRootPath}
 					onSave={() => savePath("workspaceRootPath", workspaceRootPath)}
+				/>
+			</Setting>
+			<Setting
+				name="Core repo GitHub org"
+				help="Used to build the clone URL when you press Clone on a core repo card: git@github.com:<org>/<repo>.git. Leave empty to use shipt."
+				stacked
+			>
+				<PathSettingInput
+					placeholder="shipt"
+					value={coreRepoOrg}
+					width={320}
+					onChange={setCoreRepoOrg}
+					onSave={() => {
+						const org = coreRepoOrg.trim();
+						if (org && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(org)) {
+							toast("warning", "Enter a valid GitHub org name.");
+							return;
+						}
+						update({ coreRepoOrg: org });
+					}}
 				/>
 			</Setting>
 			<Setting name="Appearance">

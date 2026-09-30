@@ -9,6 +9,7 @@ import {
 	type PermissionMode,
 	type ThemePreference,
 } from "../shared/ipc";
+import { isValidOrgName } from "./workspace";
 
 const THEMES: ThemePreference[] = ["system", "light", "dark"];
 const MODES: PermissionMode[] = ["ask", "acceptEdits", "auto"];
@@ -93,6 +94,10 @@ export function sanitizeSettingsPatch(
 		(raw.workspaceRootPath === "" || isAbsolute(raw.workspaceRootPath))
 	) {
 		out.workspaceRootPath = raw.workspaceRootPath;
+	}
+	if (typeof raw.coreRepoOrg === "string") {
+		const org = raw.coreRepoOrg.trim();
+		if (org === "" || isValidOrgName(org)) out.coreRepoOrg = org;
 	}
 	if (isStringArray(raw.pinnedSessions))
 		out.pinnedSessions = [...new Set(raw.pinnedSessions.filter(isAbsolute))];

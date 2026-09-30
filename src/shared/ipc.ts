@@ -29,6 +29,8 @@ export interface DesktopSettings {
 	glayvinHomePath: string;
 	/** Absolute path to the Cosmos workspace root. Empty uses ~/Cosmos. */
 	workspaceRootPath: string;
+	/** GitHub org used to build clone URLs for the core company repos. Empty uses the built-in default. */
+	coreRepoOrg: string;
 	/** Session file paths pinned to the top of the sidebar. */
 	pinnedSessions: string[];
 	/** Manual per-folder session order for sidebar accordion sections. */
@@ -54,6 +56,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
 	agentDirPath: "",
 	glayvinHomePath: "",
 	workspaceRootPath: "",
+	coreRepoOrg: "",
 	pinnedSessions: [],
 	sidebarSessionOrder: {},
 	recentProjects: [],
@@ -95,6 +98,18 @@ export interface WorkspaceRepoHealth {
 	exists: boolean;
 	isDirectory: boolean;
 	isGitRepo: boolean;
+	/** True when the workspace entry is a symlink pointing at a checkout elsewhere. */
+	isSymlink: boolean;
+	/** Absolute target of the symlink, when `isSymlink` is true. */
+	linkTarget?: string;
+	/** Clone URL for the curated core repos. Absent for experiments. */
+	cloneUrl?: string;
+}
+
+/** Streamed while a long-running workspace operation (currently `git clone`) runs. */
+export interface WorkspaceProgress {
+	name: string;
+	message: string;
 }
 
 export interface WorkspaceHealth {
@@ -296,6 +311,14 @@ export interface DesktopApi {
 	getSettings(): Promise<DesktopSettings>;
 	updateSettings(patch: Partial<DesktopSettings>): Promise<DesktopSettings>;
 	getWorkspaceHealth(): Promise<WorkspaceHealth>;
+	/** `git clone` a curated core repo into the workspace root. */
+	cloneWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
+	/** Pick an existing checkout anywhere on disk and symlink it into the workspace root. */
+	linkWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
+	/** Pick any folder and symlink it into the workspace root under its own name. */
+	linkExistingProject(): Promise<WorkspaceHealth | null>;
+	/** Remove a workspace symlink. Never touches real directories. */
+	unlinkWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
 	getMcpOverview(): Promise<McpConfigOverview>;
 	getFigmaXcodeAuthStatus(): Promise<FigmaXcodeAuthStatus>;
 	launchFigmaXcodePluginInstall(): Promise<void>;
@@ -355,6 +378,7 @@ export interface DesktopApi {
 	onSessionEvents(listener: (batch: SessionEventBatch) => void): () => void;
 	onSessionExit(listener: (exit: SessionExit) => void): () => void;
 	onSessionsChanged(listener: () => void): () => void;
+	onWorkspaceProgress(listener: (progress: WorkspaceProgress) => void): () => void;
 	onAuthEvent(listener: (event: AuthProgressEvent) => void): () => void;
 	onAuthPrompt(listener: (prompt: AuthPromptRequest) => void): () => void;
 	onAuthChanged(listener: () => void): () => void;
