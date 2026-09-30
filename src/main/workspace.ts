@@ -243,9 +243,7 @@ function runGitClone({
 			if (code === 0) return finish();
 			if (timedOut) return finish(new Error("git clone timed out"));
 			if (killSignal) return finish(new Error("Clone was cancelled"));
-			finish(
-				new Error(lastMeaningfulLine(tail) || `git clone failed (exit ${code})`),
-			);
+			finish(new Error(cloneFailureMessage(lastMeaningfulLine(tail), url, code)));
 		});
 	});
 }
@@ -317,6 +315,19 @@ export function lastMeaningfulLine(text: string): string {
 	const chosen = named.length > 0 ? named : lines;
 	// "ERROR:" is GitHub's own prefix and adds nothing once this is a toast.
 	return (chosen[chosen.length - 1] ?? "").replace(/^ERROR:\s*/, "");
+}
+
+/**
+ * A clone starts from a card showing only the repo's short name, so git saying
+ * "Repository not found." leaves out the part worth seeing: which org it tried.
+ */
+export function cloneFailureMessage(
+	line: string,
+	url: string,
+	code: number | null,
+): string {
+	if (!line) return `git clone failed (exit ${code ?? "unknown"})`;
+	return line.includes(url) ? line : `${line} (${url})`;
 }
 
 /** True for anything at `path`, including a symlink whose target is missing. */

@@ -56,6 +56,7 @@ import {
 	coreRepoCloneUrl,
 	inspectWorkspace,
 	linkWorkspaceRepo,
+	cloneFailureMessage,
 	lastMeaningfulLine,
 	unlinkWorkspaceRepo,
 } from "../src/main/workspace";
@@ -750,5 +751,25 @@ describe("clone failure reporting", () => {
 		expect(lastMeaningfulLine(output)).toBe(
 			"fatal: destination path 'nebula' already exists and is not an empty directory.",
 		);
+	});
+});
+
+describe("clone failure context", () => {
+	const url = "git@github.com:shipt/nebula.git";
+
+	it("names the org that was tried, which the card never shows", () => {
+		expect(cloneFailureMessage("Repository not found.", url, 128)).toBe(
+			`Repository not found. (${url})`,
+		);
+	});
+
+	it("does not repeat a URL git already quoted", () => {
+		const line = `fatal: repository '${url}' does not exist`;
+		expect(cloneFailureMessage(line, url, 128)).toBe(line);
+	});
+
+	it("falls back to the exit code when git printed nothing usable", () => {
+		expect(cloneFailureMessage("", url, 128)).toBe("git clone failed (exit 128)");
+		expect(cloneFailureMessage("", url, null)).toBe("git clone failed (exit unknown)");
 	});
 });
