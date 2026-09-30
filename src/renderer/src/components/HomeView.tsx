@@ -4,9 +4,12 @@ import {
 	ArrowUp,
 	Check,
 	Cpu,
+	Download,
 	FlaskConical,
 	FolderGit2,
 	FolderPlus,
+	Link2,
+	Link2Off,
 	Plus,
 	RefreshCw,
 	TestTubeDiagonal,
@@ -14,6 +17,7 @@ import {
 } from "lucide-react";
 import {
 	type KeyboardEvent,
+	useCallback,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
@@ -22,9 +26,10 @@ import {
 } from "react";
 import { api, basename, errorMessage, tildify } from "../lib/api";
 import { startNewSession, startSessionWithPrompt } from "../state/actions";
-import { useStore } from "../state/store";
+import { toast, useStore } from "../state/store";
 import { CosmosMark } from "./CosmosMark";
 import { Dropdown, PERMISSION_MODES } from "./Pickers";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 const SUGGESTIONS = [
 	{
@@ -273,10 +278,22 @@ function RepoTile({
 	repo,
 	home,
 	kind,
+	busy,
+	cloning,
+	progress,
+	onClone,
+	onLink,
+	onUnlink,
 }: {
 	repo: WorkspaceRepoHealth;
 	home: string | undefined;
 	kind: "core" | "experiment";
+	busy: boolean;
+	cloning: boolean;
+	progress: string;
+	onClone: () => void;
+	onLink: () => void;
+	onUnlink: () => void;
 }) {
 	const ready = repo.exists && repo.isGitRepo;
 	const state = ready ? "ready" : repo.exists ? "needs-git" : "missing";
@@ -290,23 +307,72 @@ function RepoTile({
 						<span className={`repo-card-kind repo-card-kind-${kind}`}>
 							{kind === "core" ? "Core repo" : "Experiment"}
 						</span>
+						{repo.isSymlink && (
+							<span className="repo-card-kind repo-card-kind-linked">
+								<Link2 size={11} /> Linked
+							</span>
+						)}
 					</div>
-					<div className="repo-card-path muted">{tildify(repo.path, home)}</div>
+					<div className="repo-card-path muted">
+						{repo.isSymlink && repo.linkTarget
+							? `${tildify(repo.path, home)} → ${tildify(repo.linkTarget, home)}`
+							: tildify(repo.path, home)}
+					</div>
 				</div>
 				<span className={`repo-card-status repo-card-status-${state}`}>{stateLabel}</span>
 			</div>
+			{cloning && (
+				<div className="repo-card-progress muted" title={progress}>
+					{progress || "Starting clone…"}
+				</div>
+			)}
 			<div className="repo-card-actions">
 				<button
 					type="button"
 					className="btn small"
-					disabled={!ready}
+					disabled={!ready || busy}
 					onClick={() => void startNewSession(repo.path)}
 				>
 					Open
 				</button>
+				{!ready && repo.cloneUrl && !repo.isSymlink && (
+					<button
+						type="button"
+						className="btn small primary"
+						disabled={busy}
+						title={`git clone ${repo.cloneUrl}`}
+						onClick={onClone}
+					>
+						{cloning ? <SpinnerIcon size={12} /> : <Download size={13} />}
+						{cloning ? "Cloning…" : "Clone"}
+					</button>
+				)}
+				{!ready && !repo.isSymlink && (
+					<button
+						type="button"
+						className="btn small"
+						disabled={busy}
+						title="Symlink an existing checkout into the workspace root"
+						onClick={onLink}
+					>
+						<Link2 size={13} /> Link existing…
+					</button>
+				)}
+				{repo.isSymlink && (
+					<button
+						type="button"
+						className="btn small"
+						disabled={busy}
+						title="Remove the symlink. The linked folder itself is left alone."
+						onClick={onUnlink}
+					>
+						<Link2Off size={13} /> Unlink
+					</button>
+				)}
 				<button
 					type="button"
 					className="btn small"
+					disabled={!repo.exists}
 					onClick={() => void api.revealPath(repo.path)}
 				>
 					Show in Finder
@@ -404,6 +470,10 @@ export function HomeView() {
 	const [health, setHealth] = useState<WorkspaceHealth | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [newExperimentOpen, setNewExperimentOpen] = useState(false);
+	/** Repo name currently cloning, linking, or unlinking. One at a time. */
+	const [busyRepo, setBusyRepo] = useState<string | null>(null);
+	const [cloningRepo, setCloningRepo] = useState<string | null>(null);
+	const [cloneProgress, setCloneProgress] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const [cwd, setCwd] = useState<string | null>(null);
 	const [starting, setStarting] = useState(false);
@@ -440,6 +510,79 @@ export function HomeView() {
 		el.style.height = "auto";
 		el.style.height = `${el.scrollHeight}px`;
 	}, [prompt]);
+
+	useEffect(
+		() =>
+			api.onWorkspaceProgress(({ name, message }) => {
+				if (name === cloningRepo) setCloneProgress(message);
+			}),
+		[cloningRepo],
+	);
+
+	const runRepoAction = useCallback(
+		async (
+			name: string,
+			action: () => Promise<WorkspaceHealth | null>,
+			success?: (health: WorkspaceHealth) => string,
+		) => {
+			if (busyRepo) return;
+			setBusyRepo(name);
+			try {
+				const next = await action();
+				if (next) {
+					setHealth(next);
+					if (success) toast("info", success(next));
+				}
+			} catch (error) {
+				toast("error", errorMessage(error));
+			} finally {
+				setBusyRepo(null);
+			}
+		},
+		[busyRepo],
+	);
+
+	const cloneRepo = useCallback(
+		(name: string) => {
+			setCloningRepo(name);
+			setCloneProgress("");
+			void runRepoAction(
+				name,
+				() => api.cloneWorkspaceRepo(name),
+				() => `Cloned ${name} into the workspace.`,
+			).finally(() => {
+				setCloningRepo(null);
+				setCloneProgress("");
+			});
+		},
+		[runRepoAction],
+	);
+
+	const linkRepo = useCallback(
+		(name: string) => {
+			void runRepoAction(name, () => api.linkWorkspaceRepo(name));
+		},
+		[runRepoAction],
+	);
+
+	const unlinkRepo = useCallback(
+		(name: string) => {
+			void runRepoAction(
+				name,
+				() => api.unlinkWorkspaceRepo(name),
+				() => `Unlinked ${name}. The original folder was left in place.`,
+			);
+		},
+		[runRepoAction],
+	);
+
+	const linkExistingProject = useCallback(() => {
+		void runRepoAction(
+			"__link-existing__",
+			() => api.linkExistingProject(),
+			() => "Linked the folder into your workspace.",
+		);
+	}, [runRepoAction]);
 
 	const coreRepos = health?.repos ?? [];
 	const experiments = health?.experiments ?? [];
@@ -606,6 +749,15 @@ export function HomeView() {
 								<button
 									type="button"
 									className="btn small"
+									disabled={busyRepo !== null}
+									title="Symlink a project from anywhere on disk into the workspace root"
+									onClick={linkExistingProject}
+								>
+									<Link2 size={13} /> Link existing…
+								</button>
+								<button
+									type="button"
+									className="btn small"
 									onClick={() => setNewExperimentOpen(true)}
 								>
 									<FolderPlus size={13} /> New experiment
@@ -624,7 +776,18 @@ export function HomeView() {
 						{coreRepos.length > 0 && (
 							<div className="repo-card-grid">
 								{coreRepos.map((repo) => (
-									<RepoTile key={repo.path} repo={repo} home={home} kind="core" />
+									<RepoTile
+										key={repo.path}
+										repo={repo}
+										home={home}
+										kind="core"
+										busy={busyRepo !== null}
+										cloning={cloningRepo === repo.name}
+										progress={cloneProgress}
+										onClone={() => cloneRepo(repo.name)}
+										onLink={() => linkRepo(repo.name)}
+										onUnlink={() => unlinkRepo(repo.name)}
+									/>
 								))}
 							</div>
 						)}
@@ -634,7 +797,18 @@ export function HomeView() {
 						{experiments.length > 0 ? (
 							<div className="repo-card-grid">
 								{experiments.map((repo) => (
-									<RepoTile key={repo.path} repo={repo} home={home} kind="experiment" />
+									<RepoTile
+										key={repo.path}
+										repo={repo}
+										home={home}
+										kind="experiment"
+										busy={busyRepo !== null}
+										cloning={cloningRepo === repo.name}
+										progress={cloneProgress}
+										onClone={() => cloneRepo(repo.name)}
+										onLink={() => linkRepo(repo.name)}
+										onUnlink={() => unlinkRepo(repo.name)}
+									/>
 								))}
 							</div>
 						) : (
