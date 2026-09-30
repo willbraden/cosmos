@@ -27,9 +27,10 @@ import {
 import { api, basename, errorMessage, tildify } from "../lib/api";
 import { startNewSession, startSessionWithPrompt } from "../state/actions";
 import { toast, useStore } from "../state/store";
-import { CosmosMark } from "./CosmosMark";
 import { Dropdown, PERMISSION_MODES } from "./Pickers";
 import { SpinnerIcon } from "./SpinnerIcon";
+
+const SHOW_SUGGESTIONS = false;
 
 const SUGGESTIONS = [
 	{
@@ -681,7 +682,7 @@ export function HomeView() {
 			<div className="home">
 				<div className="home-inner">
 					<div className="home-hero">
-						<CosmosMark size={44} />
+						<span className="home-hero-wordmark">cosmos</span>
 					</div>
 
 					<div className="home-composer-card">
@@ -724,22 +725,24 @@ export function HomeView() {
 						</div>
 					</div>
 
-					<div className="home-suggestions">
-						{SUGGESTIONS.map(({ prompt: text, label, icon: Icon }) => (
-							<button
-								key={label}
-								type="button"
-								className="home-suggestion"
-								disabled={!cwd || starting}
-								onClick={() => void send(text)}
-							>
-								<span className="home-suggestion-text">{text}</span>
-								<span className="home-suggestion-tag">
-									<Icon size={13} /> {label}
-								</span>
-							</button>
-						))}
-					</div>
+					{SHOW_SUGGESTIONS && (
+						<div className="home-suggestions">
+							{SUGGESTIONS.map(({ prompt: text, label, icon: Icon }) => (
+								<button
+									key={label}
+									type="button"
+									className="home-suggestion"
+									disabled={!cwd || starting}
+									onClick={() => void send(text)}
+								>
+									<span className="home-suggestion-text">{text}</span>
+									<span className="home-suggestion-tag">
+										<Icon size={13} /> {label}
+									</span>
+								</button>
+							))}
+						</div>
+					)}
 
 					<section className="home-section">
 						<div className="home-section-head">
