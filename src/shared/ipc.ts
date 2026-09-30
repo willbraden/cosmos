@@ -88,7 +88,7 @@ export interface AppInfo {
 	agentDir: string;
 	glayvinHome?: string;
 	workspaceRoot: string;
-	profileSource: "cosmos-managed" | "glayvin" | "custom";
+	agentDirSource: "cosmos-managed" | "glayvin" | "custom";
 	logPath: string;
 }
 
@@ -159,6 +159,54 @@ export interface McpConfigOverview {
 	personalDisabledPath?: string;
 	adapterConfigPath?: string;
 	servers: McpServerDefinition[];
+	notes: string[];
+}
+
+/** Which configuration layer a Glayvin pack manifest was found in. */
+export type GlayvinPackLayer = "built-in" | "team" | "local" | "unknown";
+
+export interface GlayvinPackSummary {
+	id: string;
+	layer: GlayvinPackLayer;
+	/** Set when `layer` is "team": the registered team name the manifest was found under. */
+	teamName?: string;
+	manifestPath?: string;
+	description?: string;
+	packageCount: number;
+	extensionCount: number;
+	skillCount: number;
+	commandCount: number;
+	hookCount: number;
+}
+
+export interface GlayvinTeamSummary {
+	name: string;
+	path: string;
+	exists: boolean;
+	/** Pack ids resolved from this team's directory. */
+	packIds: string[];
+}
+
+export interface GlayvinPackageSummary {
+	name: string;
+	version?: string;
+	/** Pack id that contributed this package. */
+	pack?: string;
+	/** True when Cosmos deliberately keeps this package out of its managed agent directory. */
+	excludedByCosmos: boolean;
+}
+
+export interface GlayvinProfileOverview {
+	available: boolean;
+	glayvinHome?: string;
+	resolvedPath?: string;
+	configPath?: string;
+	/** Active profile id, e.g. "default". */
+	profile?: string;
+	/** Fully resolved pack list, which can include packs the profile manifest never named. */
+	packs: GlayvinPackSummary[];
+	teams: GlayvinTeamSummary[];
+	packages: GlayvinPackageSummary[];
 	notes: string[];
 }
 
@@ -320,6 +368,8 @@ export interface DesktopApi {
 	/** Remove a workspace symlink. Never touches real directories. */
 	unlinkWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
 	getMcpOverview(): Promise<McpConfigOverview>;
+	/** Read-only view of the Glayvin profile, packs, and registered teams. */
+	getGlayvinProfileOverview(): Promise<GlayvinProfileOverview>;
 	getFigmaXcodeAuthStatus(): Promise<FigmaXcodeAuthStatus>;
 	launchFigmaXcodePluginInstall(): Promise<void>;
 	importXcodeFigmaAuth(): Promise<FigmaXcodeImportResult>;

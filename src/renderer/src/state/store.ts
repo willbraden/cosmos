@@ -69,7 +69,7 @@ export interface Toast {
 	action?: { label: string; run(): void };
 }
 
-export type SettingsPane = "general" | "providers" | "mcps" | "about";
+export type SettingsPane = "general" | "providers" | "mcps" | "glayvin" | "about";
 
 export interface AppStore {
 	appInfo?: AppInfo;

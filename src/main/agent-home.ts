@@ -9,6 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import log from "electron-log/main";
 
 const MANAGED_PROFILE_MARKER = ".cosmos-managed.json";
+const MANAGED_MARKER_VERSION = 3;
 const SEEDED_FILES = ["auth.json", "models.json", "models-store.json"] as const;
 
 function readJson(path: string): Record<string, unknown> | undefined {
@@ -81,53 +82,110 @@ function isBlockedManagedPackageSource(source: string | undefined): boolean {
 	return /(^|[/@])pi-permission-system(?=$|[@/])/i.test(source);
 }
 
-function mergeManagedPackages(
+/** Stable identity for a package entry, used for dedupe and for the seed ledger. */
+function managedPackageKey(entry: unknown): string {
+	return normalizePackageEntrySource(entry) ?? JSON.stringify(entry);
+}
+
+export interface ManagedPackageMerge {
+	packages: unknown[];
+	/** Keys of the packages this merge took from the seed, to persist in the marker. */
+	seedSources: string[];
+}
+
+/**
+ * Merges the Pi seed's packages into Cosmos's managed list.
+ *
+ * `previousSeedSources` is the ledger of what the last merge took from the seed. Entries in
+ * that ledger that the seed no longer lists are dropped, so removing a pack in Glayvin
+ * propagates; entries that were never in the ledger are user-added and always survive.
+ *
+ * Two cases deliberately remove nothing. `undefined` means there is no ledger yet (a marker
+ * written before the ledger existed), so nothing can be proven seed-derived and this run only
+ * records a baseline. And when no seed could be read at all, a missing or unreadable Glayvin
+ * must not empty the list, so the previous ledger carries forward untouched.
+ */
+export function mergeManagedPackages(
 	currentPackages: unknown[],
 	packageSource: string,
 	seedSettings: Record<string, unknown> | undefined,
-): unknown[] {
+	previousSeedSources?: readonly string[],
+): ManagedPackageMerge {
 	const seedPackages = Array.isArray(seedSettings?.packages)
 		? seedSettings.packages
 		: [];
+	const seedEntries: unknown[] = [];
+	const seedSources: string[] = [];
+	const seedKeys = new Set<string>();
+	for (const entry of seedPackages) {
+		if (isBlockedManagedPackageSource(normalizePackageEntrySource(entry)))
+			continue;
+		const key = managedPackageKey(entry);
+		if (seedKeys.has(key)) continue;
+		seedKeys.add(key);
+		seedSources.push(key);
+		seedEntries.push(entry);
+	}
+
+	const seedWasRead = seedSettings !== undefined;
+	const retired = new Set(
+		seedWasRead && previousSeedSources
+			? previousSeedSources.filter((source) => !seedKeys.has(source))
+			: [],
+	);
+
 	const currentWithoutCosmos = currentPackages.filter((entry) => {
 		const source = normalizePackageEntrySource(entry);
-		return (
-			!(source && basename(source) === "cosmos-package") &&
-			!isBlockedManagedPackageSource(source)
-		);
+		if (source && basename(source) === "cosmos-package") return false;
+		if (isBlockedManagedPackageSource(source)) return false;
+		return !retired.has(managedPackageKey(entry));
 	});
-	const merged = [...seedPackages, ...currentWithoutCosmos];
+
 	const deduped: unknown[] = [];
 	const seen = new Set<string>();
-	for (const entry of merged) {
-		const source = normalizePackageEntrySource(entry);
-		if (isBlockedManagedPackageSource(source)) continue;
-		const key = source ?? JSON.stringify(entry);
+	for (const entry of [...seedEntries, ...currentWithoutCosmos]) {
+		const key = managedPackageKey(entry);
 		if (seen.has(key)) continue;
 		seen.add(key);
 		deduped.push(entry);
 	}
 	deduped.push({ source: packageSource });
-	return deduped;
+	return {
+		packages: deduped,
+		seedSources: seedWasRead ? seedSources : [...(previousSeedSources ?? [])],
+	};
 }
 
 function syncManagedSettings(
 	targetDir: string,
 	cosmosPackageDir: string,
 	seedSettings: Record<string, unknown> | undefined,
-): { changed: boolean; packageSource: string } {
+	previousSeedSources: readonly string[] | undefined,
+): { changed: boolean; packageSource: string; seedSources: string[] } {
 	const settingsPath = join(targetDir, "settings.json");
 	const current = readJson(settingsPath) ?? {};
 	const next = { ...current };
 	const packageSource = resolve(cosmosPackageDir);
-	next.packages = mergeManagedPackages(
+	const merged = mergeManagedPackages(
 		Array.isArray(current.packages) ? current.packages : [],
 		packageSource,
 		seedSettings,
+		previousSeedSources,
 	);
+	next.packages = merged.packages;
 	const changed = JSON.stringify(current) !== JSON.stringify(next);
 	if (changed) writeJson(settingsPath, next);
-	return { changed, packageSource };
+	return { changed, packageSource, seedSources: merged.seedSources };
+}
+
+/** Returns the recorded seed ledger, or undefined for markers written before it existed. */
+function markerSeedSources(
+	marker: Record<string, unknown> | undefined,
+): string[] | undefined {
+	const value = marker?.seedPackages;
+	return Array.isArray(value)
+		? value.filter((entry): entry is string => typeof entry === "string")
+		: undefined;
 }
 
 export function cosmosManagedAgentDir(userDataDir: string): string {
@@ -147,6 +205,7 @@ export function ensureCosmosManagedAgentDir(
 	mkdirSync(join(targetDir, "sessions"), { recursive: true });
 
 	const marker = join(targetDir, MANAGED_PROFILE_MARKER);
+	const previousMarker = readJson(marker);
 	const alreadyManaged = existsSync(marker);
 	const sourceDir = seedCandidates
 		.map((path) => resolve(path))
@@ -175,24 +234,40 @@ export function ensureCosmosManagedAgentDir(
 		targetDir,
 		cosmosPackageDir,
 		sourceSettings,
+		markerSeedSources(previousMarker),
 	);
 
-	if (!alreadyManaged) {
-		writeJson(marker, {
-			version: 2,
-			managedBy: "Cosmos",
-			seededFrom: sourceDir ?? null,
-			copied,
-			createdAt: new Date().toISOString(),
-			packageSource: synced.packageSource,
-			notes: [
-				"This profile is intentionally separate from terminal/Glayvin Pi homes.",
-				"Cosmos copies login and safe defaults, then merges runtime packages from the best available Pi seed profile.",
-				"Cosmos filters out external permission-system packages so desktop Ask/Accept edits/Auto remain the only approval layer.",
-				"Cosmos also self-registers its bundled company package in this managed profile.",
-			],
-		});
+	const nextMarker = {
+		version: MANAGED_MARKER_VERSION,
+		managedBy: "Cosmos",
+		seededFrom: previousMarker
+			? typeof previousMarker.seededFrom === "string"
+				? previousMarker.seededFrom
+				: null
+			: (sourceDir ?? null),
+		copied:
+			previousMarker && Array.isArray(previousMarker.copied)
+				? previousMarker.copied
+				: copied,
+		createdAt:
+			typeof previousMarker?.createdAt === "string"
+				? previousMarker.createdAt
+				: new Date().toISOString(),
+		packageSource: synced.packageSource,
+		seedPackages: synced.seedSources,
+		notes: [
+			"This profile is intentionally separate from terminal/Glayvin Pi homes.",
+			"Cosmos copies login and safe defaults, then merges runtime packages from the best available Pi seed profile.",
+			"seedPackages records what the last merge took from that seed, so packages removed upstream are dropped instead of lingering.",
+			"Cosmos filters out external permission-system packages so desktop Ask/Accept edits/Auto remain the only approval layer.",
+			"Cosmos also self-registers its bundled company package in this managed profile.",
+		],
+	};
+	if (JSON.stringify(previousMarker ?? null) !== JSON.stringify(nextMarker)) {
+		writeJson(marker, nextMarker);
+	}
 
+	if (!alreadyManaged) {
 		log.info(
 			sourceDir
 				? `Initialized Cosmos-managed pi profile at ${targetDir} (seeded from ${sourceDir}: ${copied.join(", ") || "no files copied"})`
@@ -200,7 +275,7 @@ export function ensureCosmosManagedAgentDir(
 		);
 	} else if (synced.changed) {
 		log.info(
-			`Updated Cosmos-managed pi profile at ${targetDir} to load bundled package ${synced.packageSource}`,
+			`Updated Cosmos-managed pi profile packages at ${targetDir} (bundled package ${synced.packageSource})`,
 		);
 	}
 	return targetDir;

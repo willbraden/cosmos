@@ -42,6 +42,7 @@ import {
 import { AuthService } from "./auth-service";
 import { isDirectory, listProjectFiles, searchProjectFiles } from "./files";
 import { buildAppMenu } from "./menu";
+import { getGlayvinProfileOverview } from "./glayvin-profile";
 import {
 	getMcpOverview,
 	removePersonalMcpServer,
@@ -582,7 +583,7 @@ function registerIpc(): void {
 			agentDir,
 			glayvinHome,
 			workspaceRoot: resolveWorkspaceRootPath(settings.get()),
-			profileSource: isCosmosManagedAgentDir(agentDir)
+			agentDirSource: isCosmosManagedAgentDir(agentDir)
 				? "cosmos-managed"
 				: glayvinHome
 					? "glayvin"
@@ -658,6 +659,9 @@ function registerIpc(): void {
 		);
 		return annotateMcpSessionAvailability(overview);
 	});
+	ipcMain.handle("glayvin:profile-overview", () =>
+		getGlayvinProfileOverview(resolveCurrentGlayvinHome(getAgentDir())),
+	);
 	ipcMain.handle("figma:xcode-status", async () =>
 		getFigmaXcodeAuthStatus(getAgentDir()),
 	);
