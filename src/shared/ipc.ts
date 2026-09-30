@@ -196,6 +196,27 @@ export interface TeamMarker {
 	kind: "layer" | "product";
 }
 
+/**
+ * Whether a registered team is actually being applied. Mirrors the resolver's
+ * filter in lib/resolver/src/layers.mjs: a team is only consumed when it is not
+ * disabled and its path still exists on disk.
+ */
+export type TeamMembershipState =
+	| "active"
+	| "disabled"
+	| "missing"
+	| "unresolved";
+
+export interface TeamMembership {
+	/** The name Glayvin registered it under, which need not be the repo name. */
+	name: string;
+	/** Empty for `unresolved`, where the registered path is relative. */
+	path: string;
+	state: TeamMembershipState;
+	/** True when the registered path is not where this pane would clone the repo. */
+	elsewhere: boolean;
+}
+
 /** A team-config repo found in the org, with everything needed to judge and join it. */
 export interface DiscoveredTeam {
 	repo: string;
@@ -207,9 +228,13 @@ export interface DiscoveredTeam {
 	/** Every marker matched at the repo root, shown so the heuristic stays visible. */
 	markers: TeamMarker[];
 	classification: "team" | "template" | "uncertain";
-	/** True when this repo's path is registered in the user's glayvin.json. */
-	joined: boolean;
-	joinedPath?: string;
+	/**
+	 * Present whenever the team is registered in glayvin.json, whatever state it's
+	 * in. Absent means not joined. `state` mirrors the resolver's own filter, so a
+	 * team that isn't `active` is registered but contributing nothing.
+	 */
+	membership?: TeamMembership;
+
 	/** Set when the repo is already cloned into the workspace but not registered. */
 	clonedPath?: string;
 	/** True when the layer ships a cosmos-repos.json that curates the home screen. */
@@ -377,6 +402,8 @@ export interface DesktopApi {
 	getTeamDiscovery(options?: { refresh?: boolean }): Promise<TeamDiscovery>;
 	/** Clone a team repo into the workspace and register it with Glayvin. */
 	joinTeam(repo: string): Promise<TeamDiscovery>;
+	/** Switch a registered team on or off. Keyed by the name Glayvin registered. */
+	setTeamEnabled(name: string, enabled: boolean): Promise<TeamDiscovery>;
 
 	listSessions(): Promise<SessionSummary[]>;
 	searchSessions(query: string): Promise<string[]>;

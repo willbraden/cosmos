@@ -74,3 +74,52 @@ export function readGlayvinTeams(
 		return [];
 	}
 }
+
+function readLocalJson(
+	glayvinHome: string | undefined,
+	file: string,
+): unknown {
+	if (!glayvinHome) return undefined;
+	try {
+		return JSON.parse(readFileSync(join(glayvinHome, ".local", file), "utf8"));
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Team names the user has switched off. The resolver filters registered teams
+ * against this list (`readEnabledTeamDirs` in lib/resolver/src/layers.mjs), so a
+ * disabled team stays in glayvin.json while contributing nothing.
+ */
+export function readDisabledTeamNames(
+	glayvinHome: string | undefined,
+): string[] {
+	const parsed = readLocalJson(glayvinHome, "disabled.json") as
+		| { teams?: unknown }
+		| undefined;
+	const teams = parsed?.teams;
+	if (!Array.isArray(teams)) return [];
+	return teams.flatMap((name) =>
+		typeof name === "string" && name.trim() ? [name.trim()] : [],
+	);
+}
+
+/**
+ * Every registered team name, including entries `readGlayvinTeams` drops for
+ * having a relative path. Those are still memberships — we just can't resolve
+ * where they point — so callers can report them rather than show them as unjoined.
+ */
+export function readRegisteredTeamNames(
+	glayvinHome: string | undefined,
+): string[] {
+	const parsed = readLocalJson(glayvinHome, "glayvin.json") as
+		| { teams?: unknown }
+		| undefined;
+	const teams = parsed?.teams;
+	if (!Array.isArray(teams)) return [];
+	return teams.flatMap((entry) => {
+		const name = (entry as GlayvinTeam)?.name;
+		return typeof name === "string" && name.trim() ? [name.trim()] : [];
+	});
+}

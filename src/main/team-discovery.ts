@@ -1,8 +1,17 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { DiscoveredTeam, TeamDiscovery, TeamMarker } from "../shared/ipc";
-import type { GlayvinTeam } from "./glayvin-runtime";
+import type {
+	DiscoveredTeam,
+	TeamDiscovery,
+	TeamMarker,
+	TeamMembership,
+} from "../shared/ipc";
+import {
+	type GlayvinTeam,
+	readDisabledTeamNames,
+	readRegisteredTeamNames,
+} from "./glayvin-runtime";
 import { coreRepoCloneUrl, isValidRepoName, normalizeOrg } from "./workspace";
 
 /**
@@ -92,7 +101,15 @@ interface CacheFile {
  * Bind a runner to the user's login-shell environment. A Finder-launched app inherits a
  * minimal PATH, so `gh` and `glayvin` are only findable through the resolved env.
  */
-export function createCommandRunner(env: NodeJS.ProcessEnv): CommandRunner {
+/**
+ * `glayvin` resolves its own home from $GLAYVIN_HOME first, so pass the home Cosmos is
+ * reading. Without it a non-default glayvinHomePath registers into a different config
+ * than the pane displays, and the join looks like it silently failed.
+ */
+export function createCommandRunner(
+	env: NodeJS.ProcessEnv,
+	glayvinHome?: string,
+): CommandRunner {
 	return (file, args, timeoutMs) =>
 		new Promise((resolve) => {
 			execFile(
@@ -101,7 +118,13 @@ export function createCommandRunner(env: NodeJS.ProcessEnv): CommandRunner {
 				{
 					timeout: timeoutMs,
 					maxBuffer: 20 * 1024 * 1024,
-					env: { ...env, GH_PROMPT_DISABLED: "1", GH_PAGER: "cat", NO_COLOR: "1" },
+					env: {
+						...env,
+						...(glayvinHome ? { GLAYVIN_HOME: glayvinHome } : {}),
+						GH_PROMPT_DISABLED: "1",
+						GH_PAGER: "cat",
+						NO_COLOR: "1",
+					},
 				},
 				(error, stdout, stderr) => {
 					const raw = (error as { code?: unknown } | null)?.code;
@@ -322,25 +345,71 @@ export interface DiscoverOptions {
 	now?: () => number;
 }
 
-/** Local state is always read live, so joining takes effect without refetching. */
+export interface MembershipContext {
+	/** Names from disabled.json. */
+	disabled: readonly string[];
+	/** Every registered name, including those with relative paths. */
+	registered: readonly string[];
+	/** Injected so tests don't need real directories. */
+	exists?: (path: string) => boolean;
+}
+
+/**
+ * Which of the resolver's four conditions a registered team satisfies. Matching is
+ * by name first because that is Glayvin's key (`manage teams add <name> <path>`,
+ * and disabled.json keys on it too); path is the fallback that catches a team
+ * registered under some other name.
+ */
+export function resolveMembership(
+	repo: string,
+	localPath: string,
+	teams: readonly GlayvinTeam[],
+	context: MembershipContext,
+): TeamMembership | undefined {
+	const exists = context.exists ?? existsSync;
+	const entry =
+		teams.find((team) => team.name === repo) ??
+		teams.find((team) => team.path === localPath);
+
+	if (!entry) {
+		// Registered under a relative path, so readGlayvinTeams dropped it. It is
+		// still a membership; we just can't say where it points.
+		return context.registered.includes(repo)
+			? { name: repo, path: "", state: "unresolved", elsewhere: false }
+			: undefined;
+	}
+
+	const disabled = context.disabled.includes(entry.name);
+	return {
+		name: entry.name,
+		path: entry.path,
+		state: disabled ? "disabled" : exists(entry.path) ? "active" : "missing",
+		elsewhere: entry.path !== localPath,
+	};
+}
+
+
 function decorate(
 	candidates: readonly TeamCandidate[],
 	org: string,
 	workspaceRootPath: string,
 	teams: readonly GlayvinTeam[],
+	membershipContext: MembershipContext,
 ): DiscoveredTeam[] {
-	const joinedByPath = new Map(teams.map((team) => [team.path, team]));
 	return candidates.map((candidate) => {
 		const localPath = join(workspaceRootPath, candidate.repo);
-		const joined = joinedByPath.get(localPath);
 		const cloned = existsSync(localPath);
 		return {
 			...candidate,
 			org,
 			nameWithOwner: `${org}/${candidate.repo}`,
 			cloneUrl: coreRepoCloneUrl(candidate.repo, org),
-			joined: !!joined,
-			joinedPath: joined?.path,
+			membership: resolveMembership(
+				candidate.repo,
+				localPath,
+				teams,
+				membershipContext,
+			),
 			clonedPath: cloned ? localPath : undefined,
 		};
 	});
@@ -361,6 +430,10 @@ export async function discoverTeams(
 	const now = options.now ?? Date.now;
 	const org = normalizeOrg(options.org);
 	const { userDataDir, workspaceRootPath, glayvinHome, teams } = options;
+	const membershipContext: MembershipContext = {
+		disabled: readDisabledTeamNames(glayvinHome),
+		registered: readRegisteredTeamNames(glayvinHome),
+	};
 	const cached = readCache(userDataDir, org);
 	const canJoin = await whichCommand(run, "glayvin");
 	const base = {
@@ -379,7 +452,13 @@ export async function discoverTeams(
 		...base,
 		available: !!cached,
 		teams: cached
-			? decorate(cached.candidates, org, workspaceRootPath, teams)
+			? decorate(
+					cached.candidates,
+					org,
+					workspaceRootPath,
+					teams,
+					membershipContext,
+				)
 			: [],
 		notes: [...notes, ...joinNote],
 		fetchedAt: cached?.fetchedAt,
@@ -446,7 +525,13 @@ export async function discoverTeams(
 
 	const fetchedAt = now();
 	writeCache(userDataDir, org, candidates, fetchedAt);
-	const decorated = decorate(candidates, org, workspaceRootPath, teams);
+	const decorated = decorate(
+		candidates,
+		org,
+		workspaceRootPath,
+		teams,
+		membershipContext,
+	);
 	const notes = [...joinNote];
 	if (decorated.length === 0) {
 		notes.push(
@@ -493,5 +578,27 @@ export async function registerGlayvinTeam(
 		);
 	}
 }
+
+/** Toggling is keyed by the registered name, which need not match the repo name. */
+export async function setGlayvinTeamEnabled(options: {
+	name: string;
+	enabled: boolean;
+	run: CommandRunner;
+}): Promise<void> {
+	const action = options.enabled ? "enable" : "disable";
+	const result = await options.run(
+		"glayvin",
+		["manage", "teams", action, options.name],
+		JOIN_TIMEOUT_MS,
+	);
+	if (result.code !== 0) {
+		throw new Error(
+			firstLine(result.stderr) ||
+				firstLine(result.stdout) ||
+				`glayvin manage teams ${action} exited with code ${result.code}.`,
+		);
+	}
+}
+
 
 export { GH_TIMEOUT_MS, JOIN_TIMEOUT_MS, LAYER_MARKERS, PRODUCT_MARKERS, SEARCH_MARKERS };

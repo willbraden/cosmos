@@ -7,6 +7,7 @@ import type {
 	McpServerDefinition,
 	ProviderInfo,
 	TeamDiscovery,
+	TeamMembership,
 } from "@shared/ipc";
 import {
 	CircleCheck,
@@ -1519,19 +1520,51 @@ function relativeTime(timestamp: number | undefined): string {
 	return `${value} ${label}${value === 1 ? "" : "s"} ago`;
 }
 
+/** Why a registered team isn't applying, and the command that fixes it. */
+function MembershipNote({ membership }: { membership: TeamMembership }) {
+	if (membership.state === "active") {
+		return (
+			<div className="small-text muted selectable">
+				{membership.path}
+				{membership.elsewhere && " · outside your workspace"}
+			</div>
+		);
+	}
+	const explanation =
+		membership.state === "disabled"
+			? "Registered but switched off, so none of its config is being applied."
+			: membership.state === "missing"
+				? `Registered at ${membership.path}, which no longer exists. Glayvin skips it.`
+				: "Registered with a relative path, which only resolves inside the repo it was added from. Re-add it with an absolute path.";
+	const fix =
+		membership.state === "disabled"
+			? `glayvin manage teams enable ${membership.name}`
+			: `glayvin manage teams remove ${membership.name}`;
+	return (
+		<div className="small-text muted">
+			{explanation}
+			<div className="selectable">{fix}</div>
+		</div>
+	);
+}
+
 function TeamCard({
 	team,
 	canJoin,
 	busy,
 	progress,
 	onJoin,
+	onToggle,
 }: {
 	team: DiscoveredTeam;
 	canJoin: boolean;
 	busy: boolean;
 	progress: string;
 	onJoin: () => void;
+	onToggle: (enabled: boolean) => void;
 }) {
+	const membership = team.membership;
+	const state = membership?.state;
 	const layers = team.markers.filter((marker) => marker.kind === "layer");
 	// Only worth showing on a repo we are unsure about, where they are the evidence against.
 	const products = team.markers.filter((marker) => marker.kind === "product");
@@ -1543,12 +1576,21 @@ function TeamCard({
 					<div className="mcp-title-row">
 						<strong>{team.repo}</strong>
 						<div className="mcp-badges">
-							{team.joined && (
+							{state === "active" && (
 								<span className="badge">
 									<CircleCheck size={11} /> Joined
 								</span>
 							)}
-							{!team.joined && team.clonedPath && (
+							{state === "disabled" && (
+								<span className="mcp-badge warning">Disabled</span>
+							)}
+							{state === "missing" && (
+								<span className="mcp-badge danger">Folder missing</span>
+							)}
+							{state === "unresolved" && (
+								<span className="mcp-badge danger">Relative path</span>
+							)}
+							{!membership && team.clonedPath && (
 								<span className="mcp-badge neutral">Already cloned</span>
 							)}
 							{team.curatesRepos && (
@@ -1564,9 +1606,7 @@ function TeamCard({
 							<> · looks like a service ({products.slice(0, 3).map((m) => m.name).join(", ")})</>
 						)}
 					</div>
-					{team.joined && team.joinedPath && (
-						<div className="small-text muted selectable">{team.joinedPath}</div>
-					)}
+					{membership && <MembershipNote membership={membership} />}
 					{busy && progress && (
 						<div className="small-text muted">{progress}</div>
 					)}
@@ -1579,15 +1619,38 @@ function TeamCard({
 					>
 						<ExternalLink size={13} /> GitHub
 					</button>
-					{team.joined ? (
-						<button
-							type="button"
-							className="btn small"
-							onClick={() => void api.revealPath(team.joinedPath ?? "")}
-						>
-							<FolderOpen size={13} /> Reveal
-						</button>
-					) : (
+					{state === "active" || state === "disabled" ? (
+						<>
+							{state === "active" && (
+								<button
+									type="button"
+									className="btn small"
+									onClick={() => void api.revealPath(membership?.path ?? "")}
+								>
+									<FolderOpen size={13} /> Reveal
+								</button>
+							)}
+							<button
+								type="button"
+								className="btn small"
+								disabled={!canJoin || busy}
+								onClick={() => onToggle(state === "disabled")}
+								title={
+									canJoin ? undefined : "The glayvin command is not on your PATH"
+								}
+							>
+								{busy ? (
+									<>
+										<SpinnerIcon size={13} /> Working…
+									</>
+								) : state === "disabled" ? (
+									"Enable"
+								) : (
+									"Disable"
+								)}
+							</button>
+						</>
+					) : membership ? null : (
 						team.classification !== "template" && (
 							<button
 								type="button"
@@ -1662,25 +1725,44 @@ function Teams() {
 		}
 	};
 
-	const joined = discovery?.teams.filter((team) => team.joined) ?? [];
-	const available =
-		discovery?.teams.filter(
-			(team) => !team.joined && team.classification === "team",
-		) ?? [];
-	const uncertain =
-		discovery?.teams.filter(
-			(team) => !team.joined && team.classification === "uncertain",
-		) ?? [];
-	const template = discovery?.teams.find(
-		(team) => team.classification === "template" && !team.joined,
+	const setEnabled = async (team: DiscoveredTeam, enabled: boolean) => {
+		const name = team.membership?.name;
+		if (!name) return;
+		setJoining(name);
+		try {
+			setDiscovery(await api.setTeamEnabled(name, enabled));
+			toast("info", `${enabled ? "Enabled" : "Disabled"} ${name}.`);
+			useStore.setState((s) => ({ workspaceRevision: s.workspaceRevision + 1 }));
+		} catch (error) {
+			toast("error", errorMessage(error));
+		} finally {
+			setJoining(null);
+		}
+	};
+
+	const all = discovery?.teams ?? [];
+	// Only an active team is actually being applied, so nothing else belongs beside it.
+	const joined = all.filter((team) => team.membership?.state === "active");
+	const needsAttention = all.filter(
+		(team) => team.membership && team.membership.state !== "active",
+	);
+	const available = all.filter(
+		(team) => !team.membership && team.classification === "team",
+	);
+	const uncertain = all.filter(
+		(team) => !team.membership && team.classification === "uncertain",
+	);
+	const template = all.find(
+		(team) => team.classification === "template" && !team.membership,
 	);
 
 	const cardProps = (team: DiscoveredTeam) => ({
 		team,
 		canJoin: discovery?.canJoin ?? false,
-		busy: joining === team.repo,
+		busy: joining === team.repo || joining === team.membership?.name,
 		progress,
 		onJoin: () => void join(team.repo),
+		onToggle: (enabled: boolean) => void setEnabled(team, enabled),
 	});
 
 	return (
@@ -1738,6 +1820,20 @@ function Teams() {
 							<h4 style={{ marginTop: 18 }}>Your teams</h4>
 							<div className="mcp-list">
 								{joined.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</>
+					)}
+
+					{needsAttention.length > 0 && (
+						<>
+							<h4 style={{ marginTop: 18 }}>Needs attention</h4>
+							<div className="muted small-text" style={{ marginBottom: 8 }}>
+								Registered with Glayvin but not being applied.
+							</div>
+							<div className="mcp-list">
+								{needsAttention.map((team) => (
 									<TeamCard key={team.repo} {...cardProps(team)} />
 								))}
 							</div>

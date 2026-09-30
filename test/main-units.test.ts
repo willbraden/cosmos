@@ -23,20 +23,25 @@ import {
 	type CommandResult,
 	type CommandRunner,
 	classifyRoot,
+	createCommandRunner,
 	discoverTeams,
 	isRateLimited,
 	parseRootNames,
 	parseSearchHits,
 	readCache,
 	registerGlayvinTeam,
+	resolveMembership,
 	searchArgs,
 	searchQuery,
+	setGlayvinTeamEnabled,
 	unionSearchHits,
 	writeCache,
 } from "../src/main/team-discovery";
 import {
 	inferGlayvinHomeFromAgentDir,
+	readDisabledTeamNames,
 	readGlayvinTeams,
+	readRegisteredTeamNames,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
 import {
@@ -1264,7 +1269,7 @@ describe("team discovery", () => {
 			classification: "team",
 			nameWithOwner: "shipt/designos",
 			cloneUrl: "git@github.com:shipt/designos.git",
-			joined: false,
+			membership: undefined,
 		});
 	});
 
@@ -1297,15 +1302,18 @@ describe("team discovery", () => {
 			...baseOptions(dir, fakeRunner(happyHandlers).run),
 			teams: [{ name: "designos", path: teamPath }],
 		});
-		expect(result.teams[0].joined).toBe(true);
-		expect(result.teams[0].joinedPath).toBe(teamPath);
+		expect(result.teams[0].membership).toMatchObject({
+			name: "designos",
+			path: teamPath,
+			state: "active",
+		});
 	});
 
 	it("spots a clone that was never registered", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "teams-"));
 		mkdirSync(join(dir, "workspace", "designos"), { recursive: true });
 		const result = await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
-		expect(result.teams[0].joined).toBe(false);
+		expect(result.teams[0].membership).toBeUndefined();
 		expect(result.teams[0].clonedPath).toBe(join(dir, "workspace", "designos"));
 	});
 
@@ -1443,5 +1451,176 @@ describe("registering a Glayvin team", () => {
 				run: async () => ({ stdout: "", stderr: "Team already exists\nmore", code: 1 }),
 			}),
 		).rejects.toThrow("Team already exists");
+	});
+});
+
+describe("reading Glayvin team state", () => {
+	const home = (files: Record<string, string>) => {
+		const dir = mkdtempSync(join(tmpdir(), "gv-"));
+		mkdirSync(join(dir, ".local"), { recursive: true });
+		for (const [name, body] of Object.entries(files)) {
+			writeFileSync(join(dir, ".local", name), body);
+		}
+		return dir;
+	};
+
+	it("reads disabled team names", () => {
+		const dir = home({
+			"disabled.json": JSON.stringify({ teams: ["designos", " cosmos-ai "] }),
+		});
+		expect(readDisabledTeamNames(dir)).toEqual(["designos", "cosmos-ai"]);
+	});
+
+	it("treats a missing or malformed disabled.json as nothing disabled", () => {
+		expect(readDisabledTeamNames(home({}))).toEqual([]);
+		expect(readDisabledTeamNames(home({ "disabled.json": "{" }))).toEqual([]);
+		expect(
+			readDisabledTeamNames(home({ "disabled.json": JSON.stringify({}) })),
+		).toEqual([]);
+		expect(readDisabledTeamNames(undefined)).toEqual([]);
+	});
+
+	it("reports relative-path teams that readGlayvinTeams drops", () => {
+		const dir = home({
+			"glayvin.json": JSON.stringify({
+				teams: [
+					{ name: "absolute", path: "/tmp/absolute" },
+					{ name: "relative", path: "./team" },
+				],
+			}),
+		});
+		expect(readGlayvinTeams(dir).map((t) => t.name)).toEqual(["absolute"]);
+		expect(readRegisteredTeamNames(dir)).toEqual(["absolute", "relative"]);
+	});
+});
+
+describe("resolving team membership", () => {
+	const ctx = (over: Partial<Parameters<typeof resolveMembership>[3]> = {}) => ({
+		disabled: [],
+		registered: [],
+		exists: () => true,
+		...over,
+	});
+
+	it("matches by the registered name, not the expected path", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/elsewhere/designos" }],
+			ctx({ registered: ["designos"] }),
+		);
+		expect(membership).toMatchObject({
+			state: "active",
+			path: "/elsewhere/designos",
+			elsewhere: true,
+		});
+	});
+
+	it("falls back to the path when the team was registered under another name", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "design-system", path: "/ws/designos" }],
+			ctx(),
+		);
+		expect(membership).toMatchObject({
+			name: "design-system",
+			state: "active",
+			elsewhere: false,
+		});
+	});
+
+	it("reports a disabled team as registered but not applied", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/ws/designos" }],
+			ctx({ disabled: ["designos"] }),
+		);
+		expect(membership?.state).toBe("disabled");
+	});
+
+	it("reports a team whose folder is gone, mirroring the resolver's existsSync", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/ws/designos" }],
+			ctx({ exists: () => false }),
+		);
+		expect(membership?.state).toBe("missing");
+	});
+
+	it("prefers disabled over missing, since re-enabling alone would not help", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/ws/designos" }],
+			ctx({ disabled: ["designos"], exists: () => false }),
+		);
+		expect(membership?.state).toBe("disabled");
+	});
+
+	it("keeps a relative-path team visible rather than showing it as unjoined", () => {
+		const membership = resolveMembership("designos", "/ws/designos", [], {
+			disabled: [],
+			registered: ["designos"],
+			exists: () => true,
+		});
+		expect(membership).toMatchObject({ state: "unresolved", path: "" });
+	});
+
+	it("returns nothing for a repo that was never registered", () => {
+		expect(
+			resolveMembership("designos", "/ws/designos", [], ctx()),
+		).toBeUndefined();
+	});
+});
+
+describe("toggling a Glayvin team", () => {
+	it("enables and disables by the registered name", async () => {
+		const calls: string[][] = [];
+		const run: CommandRunner = async (file, args) => {
+			calls.push([file, ...args]);
+			return { code: 0, stdout: "", stderr: "" };
+		};
+		await setGlayvinTeamEnabled({ name: "designos", enabled: false, run });
+		await setGlayvinTeamEnabled({ name: "designos", enabled: true, run });
+		expect(calls).toEqual([
+			["glayvin", "manage", "teams", "disable", "designos"],
+			["glayvin", "manage", "teams", "enable", "designos"],
+		]);
+	});
+
+	it("surfaces the CLI's own complaint", async () => {
+		const run: CommandRunner = async () => ({
+			code: 1,
+			stdout: "",
+			stderr: "Unknown team: designos\nusage: ...",
+		});
+		await expect(
+			setGlayvinTeamEnabled({ name: "designos", enabled: true, run }),
+		).rejects.toThrow("Unknown team: designos");
+	});
+});
+
+describe("pointing the glayvin CLI at the right home", () => {
+	it("passes GLAYVIN_HOME so writes land where the pane reads", async () => {
+		const run = createCommandRunner({ PATH: "/usr/bin:/bin" }, "/tmp/fake-home");
+		const result = await run(
+			"/usr/bin/env",
+			["sh", "-c", "printf %s \"$GLAYVIN_HOME\""],
+			5000,
+		);
+		expect(result.stdout).toBe("/tmp/fake-home");
+	});
+
+	it("leaves GLAYVIN_HOME alone when no home is known", async () => {
+		const run = createCommandRunner({ PATH: "/usr/bin:/bin" });
+		const result = await run(
+			"/usr/bin/env",
+			["sh", "-c", "printf %s \"${GLAYVIN_HOME:-unset}\""],
+			5000,
+		);
+		expect(result.stdout).toBe("unset");
 	});
 });

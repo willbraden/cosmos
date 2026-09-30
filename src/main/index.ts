@@ -77,6 +77,7 @@ import {
 	createCommandRunner,
 	discoverTeams,
 	registerGlayvinTeam,
+	setGlayvinTeamEnabled,
 } from "./team-discovery";
 import { getWorktreeSupport, previewManagedWorktree } from "./worktrees";
 import {
@@ -177,7 +178,7 @@ async function currentTeamDiscovery(options: { refresh: boolean }) {
 		glayvinHome,
 		teams: readGlayvinTeams(glayvinHome),
 		refresh: options.refresh,
-		run: createCommandRunner(await resolveShellEnv()),
+		run: createCommandRunner(await resolveShellEnv(), glayvinHome),
 	});
 }
 
@@ -722,7 +723,10 @@ function registerIpc(): void {
 			await registerGlayvinTeam({
 				name: repoName,
 				path: target,
-				run: createCommandRunner(await resolveShellEnv()),
+				run: createCommandRunner(
+					await resolveShellEnv(),
+					resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME),
+				),
 			});
 			log.info(`Joined team ${repoName} at ${target}`);
 			return currentTeamDiscovery({ refresh: false });
@@ -731,6 +735,31 @@ function registerIpc(): void {
 			send("workspace:progress", { name: repoName, message: "" });
 		}
 	});
+	ipcMain.handle(
+		"teams:set-enabled",
+		async (_e, name: unknown, enabled: unknown) => {
+			const teamName = String(name ?? "").trim();
+			if (!teamName) throw new Error("A team name is required.");
+			if (joiningTeams.has(teamName)) {
+				throw new Error(`${teamName} is busy.`);
+			}
+			joiningTeams.add(teamName);
+			try {
+				await setGlayvinTeamEnabled({
+					name: teamName,
+					enabled: !!enabled,
+					run: createCommandRunner(
+						await resolveShellEnv(),
+						resolveGlayvinHomePath(settings.get(), INITIAL_GLAYVIN_HOME),
+					),
+				});
+				log.info(`${enabled ? "Enabled" : "Disabled"} team ${teamName}`);
+				return currentTeamDiscovery({ refresh: false });
+			} finally {
+				joiningTeams.delete(teamName);
+			}
+		},
+	);
 	ipcMain.handle("mcp:overview", async () => {
 		const agentDir = getAgentDir();
 		const overview = await getMcpOverview(
