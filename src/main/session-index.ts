@@ -11,9 +11,14 @@ type SessionInfo = Awaited<ReturnType<typeof SessionManager.listAll>>[number];
 const SEARCH_LIMIT = 200;
 const REFRESH_DEBOUNCE_MS = 400;
 
-export function sessionsRoot(): string {
+/** Explicit override for pi's session folder. Note pi lays this out flat, unlike its default nested folder. */
+function sessionDirOverride(): string | null {
 	const override = process.env.PI_CODING_AGENT_SESSION_DIR;
-	return override ? resolve(override) : join(getAgentDir(), "sessions");
+	return override ? resolve(override) : null;
+}
+
+export function sessionsRoot(): string {
+	return sessionDirOverride() ?? join(getAgentDir(), "sessions");
 }
 
 /**
@@ -84,8 +89,9 @@ export class SessionIndex {
 
 	/** Move a session file to the Trash (recoverable), only if it lives in pi's session folder. */
 	async trash(path: string): Promise<void> {
-		if (!isSessionFile(path)) throw new Error("Not a pi session file");
-		await shell.trashItem(path);
+		assertManagedSessionPath(path);
+		// Already gone: a second delete, or a sidebar entry that outlived the file. Resync instead of failing.
+		if (existsSync(path)) await shell.trashItem(path);
 		this.scheduleRefresh();
 	}
 
@@ -111,7 +117,13 @@ export class SessionIndex {
 		this.dirty = false;
 		const started = Date.now();
 		try {
-			this.sessions = await SessionManager.listAll();
+			// pi's no-argument listAll() ignores PI_CODING_AGENT_SESSION_DIR, so pass the override
+			// through explicitly; otherwise the sidebar lists one folder while trash() validates
+			// against another and every delete is rejected.
+			const override = sessionDirOverride();
+			this.sessions = override
+				? await SessionManager.listAll(override)
+				: await SessionManager.listAll();
 			log.debug(
 				`Indexed ${this.sessions.length} sessions in ${Date.now() - started}ms`,
 			);
@@ -122,10 +134,25 @@ export class SessionIndex {
 }
 
 export function isSessionFile(path: string): boolean {
+	return isManagedSessionPath(path) && existsSync(path);
+}
+
+/**
+ * Whether a path is shaped like a session file inside the folder this index manages. Deliberately
+ * says nothing about whether the file exists, so callers can tell "not ours" from "already gone".
+ */
+export function isManagedSessionPath(path: string): boolean {
 	if (typeof path !== "string" || !isAbsolute(path) || !path.endsWith(".jsonl"))
 		return false;
 	const rel = relative(sessionsRoot(), resolve(path));
-	return !rel.startsWith("..") && !isAbsolute(rel) && existsSync(path);
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+function assertManagedSessionPath(path: string): void {
+	if (typeof path !== "string" || !isAbsolute(path) || !path.endsWith(".jsonl"))
+		throw new Error(`Not a pi session file: ${String(path)}`);
+	if (!isManagedSessionPath(path))
+		throw new Error(`Session file is outside ${sessionsRoot()}: ${path}`);
 }
 
 function isHiddenFirstMessage(text: string): boolean {

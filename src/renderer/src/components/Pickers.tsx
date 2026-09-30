@@ -26,31 +26,35 @@ export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, on
 	}, [ref, open, onClose]);
 }
 
-function Dropdown({
+export function Dropdown({
 	trigger,
 	title,
 	children,
 	align = "left",
 	width,
+	direction = "up",
+	className = "chip",
 }: {
 	trigger: ReactNode;
 	title: string;
 	children: (close: () => void) => ReactNode;
 	align?: "left" | "right";
 	width?: number;
+	direction?: "up" | "down";
+	className?: string;
 }) {
 	const [open, setOpen] = useState(false);
 	const ref = useRef<HTMLDivElement>(null);
 	const close = () => setOpen(false);
 	useDismiss(ref, open, close);
 	return (
-		<div ref={ref} style={{ position: "relative" }}>
-			<button type="button" className="chip" title={title} onClick={() => setOpen(!open)} aria-expanded={open}>
+		<div ref={ref} className="dropdown">
+			<button type="button" className={className} title={title} onClick={() => setOpen(!open)} aria-expanded={open}>
 				{trigger}
 				<ChevronDown size={12} />
 			</button>
 			{open && (
-				<div className="popover up" style={{ [align]: 0, width }}>
+				<div className={`popover ${direction}`} style={{ [align]: 0, width }}>
 					{children(close)}
 				</div>
 			)}
@@ -73,7 +77,7 @@ export function PermissionPicker({ tab }: { tab: TabState }) {
 			trigger={
 				<>
 					<Icon size={13} />
-					<span>{current.label}</span>
+					<span className="chip-label">{current.label}</span>
 				</>
 			}
 			width={300}
@@ -128,7 +132,7 @@ export function ModelPicker({ tab }: { tab: TabState }) {
 			trigger={
 				<>
 					<Cpu size={13} />
-					<span>{tab.model?.name ?? "No model"}</span>
+					<span className="chip-label">{tab.model?.name ?? "No model"}</span>
 				</>
 			}
 		>
@@ -206,7 +210,7 @@ export function ThinkingPicker({ tab }: { tab: TabState }) {
 			trigger={
 				<>
 					<Brain size={13} />
-					<span>{LEVEL_LABELS[tab.thinkingLevel] ?? tab.thinkingLevel}</span>
+					<span className="chip-label">{LEVEL_LABELS[tab.thinkingLevel] ?? tab.thinkingLevel}</span>
 				</>
 			}
 		>

@@ -6,6 +6,7 @@ import { collectFileChanges, firstUserMessage } from "../state/chat-model";
 import { sessionTitle, type TabState, useStore } from "../state/store";
 import { Composer } from "./Composer";
 import { DialogCard } from "./DialogCard";
+import { FigmaChatAssist } from "./FigmaChatAssist";
 import { useDismiss } from "./Pickers";
 import { Transcript } from "./Transcript";
 import { SpinnerIcon } from "./SpinnerIcon";
@@ -216,6 +217,7 @@ export function ChatView({ tab }: { tab: TabState }) {
 		<div className="main">
 			<ChatHeader tab={tab} scrolled={scrolled} />
 			<div className={showCenteredComposer ? "chat-stage chat-stage-empty" : "chat-stage"}>
+				<FigmaChatAssist tab={tab} />
 				{tab.status === "starting" && tab.chat.items.length === 0 ? (
 					<div className="empty">
 						<SpinnerIcon size={20} />

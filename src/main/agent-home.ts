@@ -51,27 +51,80 @@ function pickSafePiSettings(
 }
 
 function normalizePackageEntrySource(entry: unknown): string | undefined {
-	if (typeof entry === "string" && entry.trim()) return resolve(entry);
+	if (typeof entry === "string" && entry.trim()) {
+		if (
+			entry.startsWith("npm:") ||
+			entry.startsWith("git:") ||
+			entry.startsWith("http://") ||
+			entry.startsWith("https://")
+		) {
+			return entry.trim();
+		}
+		return resolve(entry);
+	}
 	if (!entry || typeof entry !== "object") return undefined;
 	const source = (entry as Record<string, unknown>).source;
-	return typeof source === "string" && source.trim() ? resolve(source) : undefined;
+	if (typeof source !== "string" || !source.trim()) return undefined;
+	if (
+		source.startsWith("npm:") ||
+		source.startsWith("git:") ||
+		source.startsWith("http://") ||
+		source.startsWith("https://")
+	) {
+		return source.trim();
+	}
+	return resolve(source);
+}
+
+function isBlockedManagedPackageSource(source: string | undefined): boolean {
+	if (!source) return false;
+	return /(^|[/@])pi-permission-system(?=$|[@/])/i.test(source);
+}
+
+function mergeManagedPackages(
+	currentPackages: unknown[],
+	packageSource: string,
+	seedSettings: Record<string, unknown> | undefined,
+): unknown[] {
+	const seedPackages = Array.isArray(seedSettings?.packages)
+		? seedSettings.packages
+		: [];
+	const currentWithoutCosmos = currentPackages.filter((entry) => {
+		const source = normalizePackageEntrySource(entry);
+		return (
+			!(source && basename(source) === "cosmos-package") &&
+			!isBlockedManagedPackageSource(source)
+		);
+	});
+	const merged = [...seedPackages, ...currentWithoutCosmos];
+	const deduped: unknown[] = [];
+	const seen = new Set<string>();
+	for (const entry of merged) {
+		const source = normalizePackageEntrySource(entry);
+		if (isBlockedManagedPackageSource(source)) continue;
+		const key = source ?? JSON.stringify(entry);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		deduped.push(entry);
+	}
+	deduped.push({ source: packageSource });
+	return deduped;
 }
 
 function syncManagedSettings(
 	targetDir: string,
 	cosmosPackageDir: string,
+	seedSettings: Record<string, unknown> | undefined,
 ): { changed: boolean; packageSource: string } {
 	const settingsPath = join(targetDir, "settings.json");
 	const current = readJson(settingsPath) ?? {};
 	const next = { ...current };
 	const packageSource = resolve(cosmosPackageDir);
-	const existingPackages = Array.isArray(current.packages) ? current.packages : [];
-	const filteredPackages = existingPackages.filter((entry) => {
-		const source = normalizePackageEntrySource(entry);
-		return !(source && basename(source) === "cosmos-package");
-	});
-	filteredPackages.push({ source: packageSource });
-	next.packages = filteredPackages;
+	next.packages = mergeManagedPackages(
+		Array.isArray(current.packages) ? current.packages : [],
+		packageSource,
+		seedSettings,
+	);
 	const changed = JSON.stringify(current) !== JSON.stringify(next);
 	if (changed) writeJson(settingsPath, next);
 	return { changed, packageSource };
@@ -95,34 +148,34 @@ export function ensureCosmosManagedAgentDir(
 
 	const marker = join(targetDir, MANAGED_PROFILE_MARKER);
 	const alreadyManaged = existsSync(marker);
-	let sourceDir: string | undefined;
+	const sourceDir = seedCandidates
+		.map((path) => resolve(path))
+		.find((path) => path !== targetDir && existsSync(path));
 	const copied: string[] = [];
+	const sourceSettings = sourceDir
+		? readJson(join(sourceDir, "settings.json"))
+		: undefined;
 
-	if (!alreadyManaged) {
-		sourceDir = seedCandidates
-			.map((path) => resolve(path))
-			.find((path) => path !== targetDir && existsSync(path));
+	if (!alreadyManaged && sourceDir) {
+		for (const file of SEEDED_FILES) {
+			if (copyIfMissing(join(sourceDir, file), join(targetDir, file)))
+				copied.push(file);
+		}
 
-		if (sourceDir) {
-			for (const file of SEEDED_FILES) {
-				if (copyIfMissing(join(sourceDir, file), join(targetDir, file)))
-					copied.push(file);
-			}
-
-			const safeSettings = pickSafePiSettings(
-				readJson(join(sourceDir, "settings.json")),
-			);
-			if (
-				Object.keys(safeSettings).length > 0 &&
-				!existsSync(join(targetDir, "settings.json"))
-			) {
-				writeJson(join(targetDir, "settings.json"), safeSettings);
-				copied.push("settings.json(defaults only)");
-			}
+		const safeSettings = pickSafePiSettings(sourceSettings);
+		if (
+			Object.keys(safeSettings).length > 0 &&
+			!existsSync(join(targetDir, "settings.json"))
+		) {
+			writeJson(join(targetDir, "settings.json"), safeSettings);
+			copied.push("settings.json(defaults only)");
 		}
 	}
-
-	const synced = syncManagedSettings(targetDir, cosmosPackageDir);
+	const synced = syncManagedSettings(
+		targetDir,
+		cosmosPackageDir,
+		sourceSettings,
+	);
 
 	if (!alreadyManaged) {
 		writeJson(marker, {
@@ -134,7 +187,8 @@ export function ensureCosmosManagedAgentDir(
 			packageSource: synced.packageSource,
 			notes: [
 				"This profile is intentionally separate from terminal/Glayvin Pi homes.",
-				"Cosmos copies only login and model defaults, not terminal extensions or permission rules.",
+				"Cosmos copies login and safe defaults, then merges runtime packages from the best available Pi seed profile.",
+				"Cosmos filters out external permission-system packages so desktop Ask/Accept edits/Auto remain the only approval layer.",
 				"Cosmos also self-registers its bundled company package in this managed profile.",
 			],
 		});

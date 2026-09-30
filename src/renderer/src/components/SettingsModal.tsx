@@ -24,7 +24,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errorMessage, tildify } from "../lib/api";
-import { refreshProviders } from "../state/actions";
+import {
+	applyPermissionModeToAllOpenSessions,
+	refreshProviders,
+} from "../state/actions";
 import { type SettingsPane, toast, useStore } from "../state/store";
 import { LoginDialog } from "./LoginDialog";
 import { PERMISSION_MODES } from "./Pickers";
@@ -156,6 +159,7 @@ function General({
 	const [workspaceRootPath, setWorkspaceRootPath] = useState(
 		settings.workspaceRootPath,
 	);
+	const [coreRepoOrg, setCoreRepoOrg] = useState(settings.coreRepoOrg);
 	const [showAdvanced, setShowAdvanced] = useState(false);
 
 	useEffect(() => {
@@ -163,11 +167,13 @@ function General({
 		setAgentDirPath(settings.agentDirPath);
 		setGlayvinHomePath(settings.glayvinHomePath);
 		setWorkspaceRootPath(settings.workspaceRootPath);
+		setCoreRepoOrg(settings.coreRepoOrg);
 	}, [
 		settings.piCliPath,
 		settings.agentDirPath,
 		settings.glayvinHomePath,
 		settings.workspaceRootPath,
+		settings.coreRepoOrg,
 	]);
 
 	useEffect(() => {
@@ -177,11 +183,7 @@ function General({
 	}, [info?.profileSource]);
 
 	const savePath = (
-		key:
-			| "piCliPath"
-			| "agentDirPath"
-			| "glayvinHomePath"
-			| "workspaceRootPath",
+		key: "piCliPath" | "agentDirPath" | "glayvinHomePath" | "workspaceRootPath",
 		value: string,
 	) => {
 		if (value && !value.startsWith("/")) {
@@ -212,7 +214,7 @@ function General({
 			</Setting>
 			<Setting
 				name="Cosmos workspace root"
-				help="Where Cosmos expects sibling repos like cosmos-ai, segway-next, and nebula. Leave empty to use ~/Cosmos. Changing this restarts background pi processes so the company package sees the new root."
+				help="Where Cosmos expects sibling repos like cosmos-ai, segway-next, and neutron. Leave empty to use ~/Cosmos. Changing this restarts background pi processes so the company package sees the new root."
 				stacked
 			>
 				<PathSettingInput
@@ -221,6 +223,26 @@ function General({
 					width={320}
 					onChange={setWorkspaceRootPath}
 					onSave={() => savePath("workspaceRootPath", workspaceRootPath)}
+				/>
+			</Setting>
+			<Setting
+				name="Core repo GitHub org"
+				help="Used to build the clone URL when you press Clone on a core repo card: git@github.com:<org>/<repo>.git. Leave empty to use shipt."
+				stacked
+			>
+				<PathSettingInput
+					placeholder="shipt"
+					value={coreRepoOrg}
+					width={320}
+					onChange={setCoreRepoOrg}
+					onSave={() => {
+						const org = coreRepoOrg.trim();
+						if (org && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(org)) {
+							toast("warning", "Enter a valid GitHub org name.");
+							return;
+						}
+						update({ coreRepoOrg: org });
+					}}
 				/>
 			</Setting>
 			<Setting name="Appearance">
@@ -239,22 +261,44 @@ function General({
 			</Setting>
 			<Setting
 				name="Default permission mode"
-				help="Used for new sessions. Change it per session from the message box."
+				help="Used for new sessions. Change it per session from the message box, or apply the current mode to every open session below."
 			>
-				<select
-					value={settings.permissionMode}
-					onChange={(e) =>
-						update({
-							permissionMode: e.target.value as DesktopSettings["permissionMode"],
-						})
-					}
+				<div
+					style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
 				>
-					{PERMISSION_MODES.map((m) => (
-						<option key={m.mode} value={m.mode}>
-							{m.label}
-						</option>
-					))}
-				</select>
+					<select
+						value={settings.permissionMode}
+						onChange={(e) =>
+							update({
+								permissionMode: e.target.value as DesktopSettings["permissionMode"],
+							})
+						}
+					>
+						{PERMISSION_MODES.map((m) => (
+							<option key={m.mode} value={m.mode}>
+								{m.label}
+							</option>
+						))}
+					</select>
+					<button
+						type="button"
+						className="btn small"
+						onClick={() => {
+							void applyPermissionModeToAllOpenSessions(settings.permissionMode).then(
+								(count) => {
+									toast(
+										"info",
+										count > 0
+											? `Applied ${settings.permissionMode} to ${count} open session${count === 1 ? "" : "s"}.`
+											: "No open sessions to update.",
+									);
+								},
+							);
+						}}
+					>
+						Apply to all open
+					</button>
+				</div>
 			</Setting>
 			<Setting
 				name="Messages sent while pi is working"
@@ -625,9 +669,7 @@ function McpEditor({
 						Use the same entry shape as Glayvin MCP config files. A server needs
 						either a <code>url</code> or a <code>command</code>.
 					</div>
-					<div
-						style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}
-					>
+					<div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
 						<button type="button" className="btn" onClick={onClose}>
 							Cancel
 						</button>
@@ -660,18 +702,36 @@ function oauthProviderSite(server: McpServerDefinition): string | undefined {
 	}
 }
 
-function oauthSetupGuidePath(info: AppInfo | undefined, server: McpServerDefinition): string | undefined {
+function oauthSetupGuidePath(
+	info: AppInfo | undefined,
+	server: McpServerDefinition,
+): string | undefined {
 	if (!info) return undefined;
-	if (isFigmaMcp(server)) return `${info.workspaceRoot}/cosmos-ai/docs/figma-mcp-setup.md`;
+	if (isFigmaMcp(server))
+		return `${info.workspaceRoot}/cosmos-ai/docs/figma-mcp-setup.md`;
 	return undefined;
 }
 
 function oauthHelpText(server: McpServerDefinition): string {
-	if (isFigmaMcp(server) && server.oauthConnected && server.sessionAvailable === false) {
-		return server.sessionAvailabilityMessage ?? "Cosmos found the Figma sign-in, but fresh sessions still are not loading the Figma tools.";
+	if (
+		isFigmaMcp(server) &&
+		server.oauthConnected &&
+		server.sessionAvailable === false
+	) {
+		return (
+			server.sessionAvailabilityMessage ??
+			"Cosmos found the Figma sign-in, but fresh sessions still are not loading the Figma tools."
+		);
 	}
-	if (isFigmaMcp(server) && server.oauthConnected && server.sessionAvailable === true) {
-		return server.sessionAvailabilityMessage ?? "Figma is connected and fresh sessions can load the Figma tools.";
+	if (
+		isFigmaMcp(server) &&
+		server.oauthConnected &&
+		server.sessionAvailable === true
+	) {
+		return (
+			server.sessionAvailabilityMessage ??
+			"Figma is connected and fresh sessions can load the Figma tools."
+		);
 	}
 	if (isFigmaMcp(server)) {
 		return "Click Connect Figma for guided Xcode beta setup. Cosmos watches for the finished sign-in and can import it back into Pi automatically.";
@@ -687,8 +747,11 @@ function toolPreview(tools: string[]): string {
 }
 
 function oauthPrimaryLabel(server: McpServerDefinition): string {
-	if (isFigmaMcp(server)) return server.oauthConnected ? "Reconnect Figma" : "Connect Figma";
-	return server.oauthConnected ? `Reconnect ${server.name}` : `Connect ${server.name}`;
+	if (isFigmaMcp(server))
+		return server.oauthConnected ? "Reconnect Figma" : "Connect Figma";
+	return server.oauthConnected
+		? `Reconnect ${server.name}`
+		: `Connect ${server.name}`;
 }
 
 interface FigmaConnectFlowState {
@@ -698,10 +761,23 @@ interface FigmaConnectFlowState {
 	message?: string;
 }
 
-function StepRow({ done, title, detail }: { done: boolean; title: string; detail: string }) {
+function StepRow({
+	done,
+	title,
+	detail,
+}: {
+	done: boolean;
+	title: string;
+	detail: string;
+}) {
 	return (
-		<div className="small-text" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-			<span style={{ color: done ? "var(--success)" : "var(--text-muted)" }}>{done ? "✓" : "•"}</span>
+		<div
+			className="small-text"
+			style={{ display: "flex", gap: 8, alignItems: "flex-start" }}
+		>
+			<span style={{ color: done ? "var(--success)" : "var(--text-muted)" }}>
+				{done ? "✓" : "•"}
+			</span>
 			<div>
 				<div style={{ color: done ? "var(--text)" : undefined }}>{title}</div>
 				<div className="muted">{detail}</div>
@@ -727,18 +803,35 @@ function FigmaConnectDialog({
 	const connected = flow.phase === "connected" || !!status?.piOAuthConnected;
 	const waiting = flow.phase === "checking" || flow.phase === "importing";
 	const needsXcode = status ? !status.xcodeInstalled : false;
-	const needsPlugin = status ? status.xcodeInstalled && !status.xcodeHasFigmaServer : false;
+	const needsPlugin = status
+		? status.xcodeInstalled && !status.xcodeHasFigmaServer
+		: false;
 	const waitingForSignIn = status
-		? status.xcodeInstalled && status.xcodeHasFigmaServer && !status.xcodeHasBearerToken && !status.piOAuthConnected
+		? status.xcodeInstalled &&
+			status.xcodeHasFigmaServer &&
+			!status.xcodeHasBearerToken &&
+			!status.piOAuthConnected
 		: false;
 	return (
-		<div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-			<div className="modal small" role="dialog" aria-label={`Connect ${flow.serverName}`}>
+		<div
+			className="modal-backdrop"
+			onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+		>
+			<div
+				className="modal small"
+				role="dialog"
+				aria-label={`Connect ${flow.serverName}`}
+			>
 				<div className="login-body">
 					<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
 						<Plug size={18} />
 						<h3 style={{ flex: 1 }}>Connect {flow.serverName}</h3>
-						<button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+						<button
+							type="button"
+							className="icon-btn"
+							onClick={onClose}
+							aria-label="Close"
+						>
 							<X size={16} />
 						</button>
 					</div>
@@ -746,7 +839,9 @@ function FigmaConnectDialog({
 					{waiting && (
 						<div className="working">
 							<SpinnerIcon size={14} />
-							{flow.phase === "importing" ? " Importing Figma sign-in from Xcode…" : " Checking Xcode and Figma sign-in…"}
+							{flow.phase === "importing"
+								? " Importing Figma sign-in from Xcode…"
+								: " Checking Xcode and Figma sign-in…"}
 						</div>
 					)}
 					{connected && (
@@ -755,57 +850,98 @@ function FigmaConnectDialog({
 						</div>
 					)}
 					{flow.phase === "failed" && (
-						<div className="notice warning">{flow.message ?? "Could not finish Figma sign-in."}</div>
+						<div className="notice warning">
+							{flow.message ?? "Could not finish Figma sign-in."}
+						</div>
 					)}
 					{flow.message && flow.phase !== "failed" && flow.phase !== "connected" && (
 						<div className="notice info">{flow.message}</div>
 					)}
 
 					<div className="small-text" style={{ whiteSpace: "pre-wrap" }}>
-						Cosmos can watch Xcode for a finished Figma sign-in and import it back into Pi automatically. You can also press Continue after signing in.
+						Cosmos can watch Xcode for a finished Figma sign-in and import it back
+						into Pi automatically. You can also press Continue after signing in.
 					</div>
 
 					<div style={{ display: "grid", gap: 10 }}>
 						<StepRow
 							done={!!status?.xcodeInstalled}
 							title="Install Xcode beta"
-							detail={needsXcode ? "Install Xcode beta first, then come back here and press Continue." : "Xcode is available on this Mac."}
+							detail={
+								needsXcode
+									? "Install Xcode beta first, then come back here and press Continue."
+									: "Xcode is available on this Mac."
+							}
 						/>
 						<StepRow
 							done={!!status?.xcodeHasFigmaServer}
 							title="Add the Figma MCP plugin in Xcode"
-							detail={needsPlugin ? "Cosmos can open the Xcode add-plugin flow for you." : "The Figma plugin is already present in Xcode."}
+							detail={
+								needsPlugin
+									? "Cosmos can open the Xcode add-plugin flow for you."
+									: "The Figma plugin is already present in Xcode."
+							}
 						/>
 						<StepRow
 							done={!!status?.xcodeHasBearerToken}
 							title="Sign in to Figma inside Xcode"
-							detail={waitingForSignIn ? "Finish the sign-in in Xcode, then press Continue or wait for Cosmos to detect it." : "Once Xcode has a usable Figma token, Cosmos can import it here."}
+							detail={
+								waitingForSignIn
+									? "Finish the sign-in in Xcode, then press Continue or wait for Cosmos to detect it."
+									: "Once Xcode has a usable Figma token, Cosmos can import it here."
+							}
 						/>
 						<StepRow
 							done={!!status?.piOAuthConnected}
 							title="Import the sign-in back into Cosmos"
-							detail={connected ? "Cosmos can now use the Figma MCP server." : "Cosmos imports the Xcode sign-in automatically when it becomes available."}
+							detail={
+								connected
+									? "Cosmos can now use the Figma MCP server."
+									: "Cosmos imports the Xcode sign-in automatically when it becomes available."
+							}
 						/>
 					</div>
 
 					{status && (
-						<div className="small-text muted selectable wrap-anywhere" style={{ display: "grid", gap: 4 }}>
-							<div>Xcode MCP config: {tildify(status.xcodeMcpConfigPath, undefined)}</div>
+						<div
+							className="small-text muted selectable wrap-anywhere"
+							style={{ display: "grid", gap: 4 }}
+						>
+							<div>
+								Xcode MCP config: {tildify(status.xcodeMcpConfigPath, undefined)}
+							</div>
 							<div>Pi token path: {tildify(status.piOAuthTokensPath, undefined)}</div>
 						</div>
 					)}
 
-					<div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+					<div
+						style={{
+							display: "flex",
+							gap: 8,
+							justifyContent: "flex-end",
+							flexWrap: "wrap",
+						}}
+					>
 						<button type="button" className="btn" onClick={onRefresh}>
 							<RefreshCw size={12} /> Refresh status
 						</button>
 						{needsXcode && (
-							<button type="button" className="btn" onClick={() => void api.openExternal("https://developer.apple.com/xcode/")}>
+							<button
+								type="button"
+								className="btn"
+								onClick={() =>
+									void api.openExternal("https://developer.apple.com/xcode/")
+								}
+							>
 								<ExternalLink size={12} /> Get Xcode beta
 							</button>
 						)}
 						{status?.xcodeInstalled && status.xcodeAppPath && (
-							<button type="button" className="btn" onClick={() => void api.openPath(status.xcodeAppPath!)}>
+							<button
+								type="button"
+								className="btn"
+								onClick={() => void api.openPath(status.xcodeAppPath!)}
+							>
 								Open Xcode
 							</button>
 						)}
@@ -842,6 +978,7 @@ async function copyValue(value: string, label: string): Promise<void> {
 
 function Mcps() {
 	const info = useStore((s) => s.appInfo);
+	const settings = useStore((s) => s.settings);
 	const [overview, setOverview] = useState<McpConfigOverview | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [editing, setEditing] = useState<McpServerDefinition | null>(null);
@@ -851,6 +988,11 @@ function Mcps() {
 		figmaFlow && figmaFlow.phase !== "connected" && figmaFlow.phase !== "failed"
 			? figmaFlow.serverName
 			: null;
+	const updateSettings = (patch: Partial<DesktopSettings>) => {
+		void api
+			.updateSettings(patch)
+			.then((next) => useStore.setState({ settings: next }));
+	};
 
 	const refresh = useCallback(async () => {
 		setLoading(true);
@@ -876,18 +1018,28 @@ function Mcps() {
 						? {
 								...current,
 								status,
-								phase: status.piOAuthConnected ? "connected" : current.phase === "importing" ? "importing" : "waiting",
+								phase: status.piOAuthConnected
+									? "connected"
+									: current.phase === "importing"
+										? "importing"
+										: "waiting",
 							}
 						: current,
 				);
 				if (status.piOAuthConnected) {
 					await refresh();
 					setFigmaFlow((current) =>
-						current ? { ...current, status, phase: "connected", message: undefined } : current,
+						current
+							? { ...current, status, phase: "connected", message: undefined }
+							: current,
 					);
 					return;
 				}
-				if (options?.launchPlugin && status.xcodeInstalled && !status.xcodeHasFigmaServer) {
+				if (
+					options?.launchPlugin &&
+					status.xcodeInstalled &&
+					!status.xcodeHasFigmaServer
+				) {
 					await api.launchFigmaXcodePluginInstall();
 					setFigmaFlow((current) =>
 						current
@@ -895,7 +1047,8 @@ function Mcps() {
 									...current,
 									status,
 									phase: "waiting",
-									message: "Xcode opened the Figma plugin install flow. Add the plugin there, then sign in.",
+									message:
+										"Xcode opened the Figma plugin install flow. Add the plugin there, then sign in.",
 								}
 							: current,
 					);
@@ -903,7 +1056,9 @@ function Mcps() {
 				}
 				if (options?.importIfReady !== false && status.xcodeHasBearerToken) {
 					setFigmaFlow((current) =>
-						current ? { ...current, status, phase: "importing", message: undefined } : current,
+						current
+							? { ...current, status, phase: "importing", message: undefined }
+							: current,
 					);
 					const result = await api.importXcodeFigmaAuth();
 					await refresh();
@@ -987,6 +1142,18 @@ function Mcps() {
 				Active tools come from Glayvin's merged MCP config. Personal additions are
 				written to your local <code>mcp-config.json</code>.
 			</p>
+			<Setting
+				name="Use chat context"
+				help="When enabled, Cosmos can pause likely Figma design prompts until the Figma MCP is ready in fresh sessions. Turn this off to stop chat prompts from being gated by Figma availability."
+			>
+				<Switch
+					label="Use chat context for Figma gating"
+					on={settings.figmaChatContextGate}
+					onChange={(figmaChatContextGate) =>
+						updateSettings({ figmaChatContextGate })
+					}
+				/>
+			</Setting>
 			<div className="mcp-toolbar">
 				<button type="button" className="btn small" onClick={() => void refresh()}>
 					<RefreshCw size={12} /> Refresh
@@ -1084,27 +1251,41 @@ function Mcps() {
 													{server.auth === "oauth" && server.oauthConnected && (
 														<span className="mcp-badge oauth">OAuth ready</span>
 													)}
-													{server.auth === "oauth" && server.oauthConnected && server.sessionAvailable === true && (
-														<span className="mcp-badge neutral">Ready in new sessions</span>
-													)}
-													{server.auth === "oauth" && server.oauthConnected && server.sessionAvailable === false && (
-														<span className="mcp-badge warning">Not loading in sessions</span>
-													)}
+													{server.auth === "oauth" &&
+														server.oauthConnected &&
+														server.sessionAvailable === true && (
+															<span className="mcp-badge neutral">Ready in new sessions</span>
+														)}
+													{server.auth === "oauth" &&
+														server.oauthConnected &&
+														server.sessionAvailable === false && (
+															<span className="mcp-badge warning">
+																Not loading in sessions
+															</span>
+														)}
 													{server.auth === "oauth" && !server.oauthConnected && (
 														<span className="mcp-badge warning">OAuth needed</span>
 													)}
 												</div>
 											</div>
 											<div className="source">{transportLabel(server)}</div>
-											<div className="small-text muted">{server.tools.length ? `Tools · ${server.tools.length} available` : "Tools · uses server defaults"}</div>
+											<div className="small-text muted">
+												{server.tools.length
+													? `Tools · ${server.tools.length} available`
+													: "Tools · uses server defaults"}
+											</div>
 											{server.tools.length > 0 && (
 												<details className="mcp-tools">
 													<summary>{toolPreview(server.tools)}</summary>
-													<div className="mcp-tools-body small-text muted selectable">{server.tools.join(", ")}</div>
+													<div className="mcp-tools-body small-text muted selectable">
+														{server.tools.join(", ")}
+													</div>
 												</details>
 											)}
 											{server.auth === "oauth" && (
-												<div className={`mcp-oauth-note${server.oauthConnected ? " connected" : ""}`}>
+												<div
+													className={`mcp-oauth-note${server.oauthConnected ? " connected" : ""}`}
+												>
 													<div>{oauthHelpText(server)}</div>
 												</div>
 											)}
@@ -1118,7 +1299,10 @@ function Mcps() {
 														onClick={() => void connectOAuth(server)}
 														disabled={connectingServer === server.name}
 													>
-														<ExternalLink size={12} /> {connectingServer === server.name ? "Starting…" : oauthPrimaryLabel(server)}
+														<ExternalLink size={12} />{" "}
+														{connectingServer === server.name
+															? "Starting…"
+															: oauthPrimaryLabel(server)}
 													</button>
 													<details className="mcp-troubleshoot">
 														<summary>Troubleshoot</summary>
@@ -1127,7 +1311,9 @@ function Mcps() {
 																<button
 																	type="button"
 																	className="btn small"
-																	onClick={() => void api.openExternal(oauthProviderSite(server)!)}
+																	onClick={() =>
+																		void api.openExternal(oauthProviderSite(server)!)
+																	}
 																>
 																	<ExternalLink size={12} /> Open provider site
 																</button>
@@ -1136,7 +1322,9 @@ function Mcps() {
 																<button
 																	type="button"
 																	className="btn small"
-																	onClick={() => void api.openInEditor(oauthSetupGuidePath(info, server)!)}
+																	onClick={() =>
+																		void api.openInEditor(oauthSetupGuidePath(info, server)!)
+																	}
 																>
 																	<ExternalLink size={12} /> Open setup guide
 																</button>
@@ -1153,7 +1341,12 @@ function Mcps() {
 																	<button
 																		type="button"
 																		className="btn small"
-																		onClick={() => void copyValue(server.oauthTokensPath!, `${server.name} token path`)}
+																		onClick={() =>
+																			void copyValue(
+																				server.oauthTokensPath!,
+																				`${server.name} token path`,
+																			)
+																		}
 																	>
 																		<Copy size={12} /> Copy token path
 																	</button>
@@ -1216,7 +1409,9 @@ function Mcps() {
 					flow={figmaFlow}
 					onClose={() => setFigmaFlow(null)}
 					onRefresh={() => void refreshFigmaFlow({ importIfReady: false })}
-					onLaunchPlugin={() => void refreshFigmaFlow({ launchPlugin: true, importIfReady: false })}
+					onLaunchPlugin={() =>
+						void refreshFigmaFlow({ launchPlugin: true, importIfReady: false })
+					}
 					onContinue={() => void refreshFigmaFlow({ importIfReady: true })}
 				/>
 			)}

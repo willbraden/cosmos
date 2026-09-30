@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+	existsSync,
+	mkdtempSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,11 +17,17 @@ vi.mock("electron-log/main", () => ({
 }));
 
 import * as bridge from "../resources/pi-extension/desktop-bridge";
+import { ensureCosmosManagedAgentDir } from "../src/main/agent-home";
 import { fuzzyScore } from "../src/main/files";
 import {
 	inferGlayvinHomeFromAgentDir,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
+import {
+	managedWorktreeRoot,
+	planManagedWorktree,
+	sanitizeSegment,
+} from "../src/main/worktrees";
 import {
 	buildFigmaPiAuthEntry,
 	piOauthTokensPath,
@@ -28,11 +42,30 @@ import {
 } from "../src/main/mcp-config";
 import { extractReportedActiveTools } from "../src/main/mcp-session-availability";
 import { encodeJsonl, JsonlDecoder } from "../src/main/pi/jsonl";
+import {
+	isManagedSessionPath,
+	isSessionFile,
+	SessionIndex,
+} from "../src/main/session-index";
 import { sanitizeSettingsPatch } from "../src/main/settings";
 import { parseEnvOutput } from "../src/main/shell-env";
+import { supervisorBuildId } from "../src/main/supervisor-identity";
 import {
+	assertWorkspaceEntryName,
+	cloneWorkspaceRepo,
+	coreRepoCloneUrl,
+	inspectWorkspace,
+	isCoreRepoName,
+	linkWorkspaceRepo,
+	cloneFailureMessage,
+	lastMeaningfulLine,
+	unlinkWorkspaceRepo,
+} from "../src/main/workspace";
+import {
+	PERMISSION_MODE_COMMAND,
 	PERMISSION_OPTIONS,
 	PERMISSION_PROMPT_MARKER,
+	permissionNeedsApproval,
 } from "../src/shared/pi-types";
 
 describe("JsonlDecoder", () => {
@@ -100,13 +133,93 @@ describe("desktop bridge extension", () => {
 		expect(bridge.parseMode("yolo")).toBeUndefined();
 		expect(bridge.parseMode(undefined)).toBeUndefined();
 	});
+
+	it("registers the slash command the host uses for live mode switches", () => {
+		const previous = process.env.PI_DESKTOP;
+		process.env.PI_DESKTOP = "1";
+		const commands = new Map<string, { handler(args: string): Promise<void> }>();
+		try {
+			bridge.default({
+				registerCommand: (name: string, spec: unknown) =>
+					commands.set(name, spec as { handler(args: string): Promise<void> }),
+				on: () => {},
+			} as never);
+		} finally {
+			if (previous === undefined) delete process.env.PI_DESKTOP;
+			else process.env.PI_DESKTOP = previous;
+		}
+		expect([...commands.keys()]).toContain(PERMISSION_MODE_COMMAND);
+	});
+
+	it("agrees with the shared approval mirror the renderer uses", () => {
+		const none = new Set<string>();
+		for (const mode of ["ask", "acceptEdits", "auto"] as const)
+			for (const tool of ["read", "grep", "edit", "write", "bash", "mcp_thing"])
+				expect(permissionNeedsApproval(mode, tool)).toBe(
+					bridge.needsApproval(mode, tool, none),
+				);
+	});
+});
+
+describe("managed worktrees", () => {
+	it("sanitizes worktree path and branch segments safely", () => {
+		expect(sanitizeSegment(" Feature Branch / Weird Name ")).toBe(
+			"feature-branch-weird-name",
+		);
+		expect(sanitizeSegment("***", 12)).toBe("");
+	});
+
+	it("plans managed worktrees under a repo-scoped root", () => {
+		const root = managedWorktreeRoot(
+			"/tmp/cosmos",
+			"/Users/test/Cosmos/cosmos-gui",
+		);
+		expect(root).toBe("/tmp/cosmos/worktrees/cosmos-gui");
+		expect(planManagedWorktree(root, "task 123", "worker:abc")).toEqual({
+			path: "/tmp/cosmos/worktrees/cosmos-gui/task-123-worker-abc",
+			branch: "cosmos/task-123/worker-abc",
+		});
+	});
+});
+
+describe("cosmos managed agent home", () => {
+	it("merges seeded runtime packages into the managed profile", () => {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-managed-agent-"));
+		const userData = join(root, "user-data");
+		const seed = join(root, "seed-agent");
+		const cosmosPackage = join(root, "cosmos-package");
+		mkdirSync(seed, { recursive: true });
+		mkdirSync(cosmosPackage, { recursive: true });
+		writeFileSync(
+			join(seed, "settings.json"),
+			JSON.stringify({
+				defaultProvider: "github-copilot",
+				packages: [
+					"npm:pi-mcp-adapter@2.21.2",
+					"npm:pi-lens@4.0.0",
+					"npm:@gotgenes/pi-permission-system@24.0.0",
+				],
+			}),
+		);
+		const managed = ensureCosmosManagedAgentDir(userData, [seed], cosmosPackage);
+		const settings = JSON.parse(
+			readFileSync(join(managed, "settings.json"), "utf8"),
+		) as {
+			packages?: unknown[];
+		};
+		expect(settings.packages).toEqual([
+			"npm:pi-mcp-adapter@2.21.2",
+			"npm:pi-lens@4.0.0",
+			{ source: cosmosPackage },
+		]);
+	});
 });
 
 describe("glayvin runtime detection", () => {
 	it("infers GLAYVIN_HOME from a glayvin-style agent dir", () => {
-		expect(
-			inferGlayvinHomeFromAgentDir("/Users/test/.glayvin/.pi/agent"),
-		).toBe("/Users/test/.glayvin");
+		expect(inferGlayvinHomeFromAgentDir("/Users/test/.glayvin/.pi/agent")).toBe(
+			"/Users/test/.glayvin",
+		);
 		expect(inferGlayvinHomeFromAgentDir("/tmp/custom-agent")).toBeUndefined();
 	});
 
@@ -173,12 +286,16 @@ describe("mcp config helpers", () => {
 			"figma",
 			"graphos",
 		]);
-		expect(overview.servers.find((server) => server.name === "figma")).toMatchObject({
+		expect(
+			overview.servers.find((server) => server.name === "figma"),
+		).toMatchObject({
 			active: true,
 			personal: false,
 			auth: "oauth",
 		});
-		expect(overview.servers.find((server) => server.name === "graphos")).toMatchObject({
+		expect(
+			overview.servers.find((server) => server.name === "graphos"),
+		).toMatchObject({
 			active: false,
 			personal: true,
 			transport: "command",
@@ -250,7 +367,9 @@ describe("mcp config helpers", () => {
 			"figma",
 			"localdemo",
 		]);
-		expect(overview.servers.find((server) => server.name === "figma")).toMatchObject({
+		expect(
+			overview.servers.find((server) => server.name === "figma"),
+		).toMatchObject({
 			active: true,
 			personal: true,
 			auth: "oauth",
@@ -274,15 +393,25 @@ describe("mcp config helpers", () => {
 			command: "npx",
 			args: ["-y", "test-mcp"],
 		});
-		let overview = await getMcpOverview(glayvinHome, join(glayvinHome, ".pi", "agent"));
-		expect(overview.servers.find((server) => server.name === "test-server")).toMatchObject({
+		let overview = await getMcpOverview(
+			glayvinHome,
+			join(glayvinHome, ".pi", "agent"),
+		);
+		expect(
+			overview.servers.find((server) => server.name === "test-server"),
+		).toMatchObject({
 			personal: true,
 			active: false,
 		});
 
 		removePersonalMcpServer(glayvinHome, "test-server");
-		overview = await getMcpOverview(glayvinHome, join(glayvinHome, ".pi", "agent"));
-		expect(overview.servers.find((server) => server.name === "test-server")).toBeUndefined();
+		overview = await getMcpOverview(
+			glayvinHome,
+			join(glayvinHome, ".pi", "agent"),
+		);
+		expect(
+			overview.servers.find((server) => server.name === "test-server"),
+		).toBeUndefined();
 	});
 });
 
@@ -391,5 +520,275 @@ describe("fuzzy file matching", () => {
 		expect(b).toBeNull();
 		const c = fuzzyScore("b/u/t/t/o/n/index.ts", "button") ?? -Infinity;
 		expect(a).toBeGreaterThan(c);
+	});
+});
+
+describe("workspace repos", () => {
+	function workspace(): string {
+		return mkdtempSync(join(tmpdir(), "cosmos-workspace-"));
+	}
+
+	it("builds core clone URLs from the default org and a valid override", () => {
+		expect(coreRepoCloneUrl("neutron")).toBe("git@github.com:shipt/neutron.git");
+		expect(coreRepoCloneUrl("neutron", "acme-co")).toBe(
+			"git@github.com:acme-co/neutron.git",
+		);
+		// Junk orgs fall back rather than producing a broken or injected URL.
+		expect(coreRepoCloneUrl("neutron", "bad org/../x")).toBe(
+			"git@github.com:shipt/neutron.git",
+		);
+	});
+
+	it("rejects entry names that escape the workspace root", () => {
+		for (const name of ["..", ".", "a/b", "../evil", ".hidden", "  ", "a\u0000b"]) {
+			expect(() => assertWorkspaceEntryName(name)).toThrow();
+		}
+		expect(assertWorkspaceEntryName("  cosmos-ai ")).toBe("cosmos-ai");
+	});
+
+	it("reports symlinked checkouts as linked, ready repos", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		mkdirSync(join(external, ".git"), { recursive: true });
+
+		linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: external });
+		const health = inspectWorkspace(root);
+		const neutron = health.repos.find((repo) => repo.name === "neutron");
+
+		expect(neutron?.isSymlink).toBe(true);
+		expect(neutron?.linkTarget).toBe(external);
+		expect(neutron?.isGitRepo).toBe(true);
+		expect(health.readyRepos).toBe(1);
+	});
+
+	it("refuses to link over an existing entry or from inside the workspace", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		const inside = join(root, "already-here");
+		mkdirSync(inside, { recursive: true });
+
+		expect(() =>
+			linkWorkspaceRepo({ rootPath: root, name: "already-here", targetPath: external }),
+		).toThrow(/already exists/);
+		expect(() =>
+			linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: inside }),
+		).toThrow(/already inside/);
+		expect(() =>
+			linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: join(external, "nope") }),
+		).toThrow(/not a folder/);
+	});
+
+	it("unlinks symlinks but never deletes a real folder", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		writeFileSync(join(external, "keep.txt"), "keep me");
+		linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: external });
+		mkdirSync(join(root, "real-thing"), { recursive: true });
+
+		unlinkWorkspaceRepo(root, "neutron");
+		expect(existsSync(join(root, "neutron"))).toBe(false);
+		expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("keep me");
+
+		expect(() => unlinkWorkspaceRepo(root, "real-thing")).toThrow(/real folder/);
+		expect(existsSync(join(root, "real-thing"))).toBe(true);
+	});
+
+	it("clones a repo into the workspace root and streams progress", async () => {
+		const root = workspace();
+		const origin = mkdtempSync(join(tmpdir(), "cosmos-origin-"));
+		execFileSync("git", ["init", "--quiet", "--initial-branch=main", origin]);
+		writeFileSync(join(origin, "README.md"), "# neutron\n");
+		const gitEnv = {
+			...process.env,
+			GIT_AUTHOR_NAME: "Test",
+			GIT_AUTHOR_EMAIL: "test@example.com",
+			GIT_COMMITTER_NAME: "Test",
+			GIT_COMMITTER_EMAIL: "test@example.com",
+		};
+		execFileSync("git", ["-C", origin, "add", "."], { env: gitEnv });
+		execFileSync("git", ["-C", origin, "commit", "--quiet", "-m", "init"], {
+			env: gitEnv,
+		});
+
+		const progress: string[] = [];
+		const target = await cloneWorkspaceRepo({
+			rootPath: root,
+			name: "neutron",
+			url: `file://${origin}`,
+			onProgress: (message) => progress.push(message),
+		});
+
+		expect(target).toBe(join(root, "neutron"));
+		expect(readFileSync(join(target, "README.md"), "utf8")).toBe("# neutron\n");
+		expect(inspectWorkspace(root).readyRepos).toBe(1);
+		expect(progress.length).toBeGreaterThan(0);
+		// Staging directories must not survive a successful clone.
+		expect(readdirSync(root)).toEqual(["neutron"]);
+	});
+
+	it("leaves no directory behind when a clone fails", async () => {
+		const root = workspace();
+		await expect(
+			cloneWorkspaceRepo({
+				rootPath: root,
+				name: "neutron",
+				url: `file://${join(tmpdir(), "cosmos-missing-origin")}`,
+			}),
+		).rejects.toThrow();
+		expect(existsSync(join(root, "neutron"))).toBe(false);
+		expect(readdirSync(root)).toEqual([]);
+	});
+
+	it("rejects clone URLs that are not recognised git transports", async () => {
+		const root = workspace();
+		await expect(
+			cloneWorkspaceRepo({
+				rootPath: root,
+				name: "neutron",
+				url: "--upload-pack=touch /tmp/pwned",
+			}),
+		).rejects.toThrow(/git@/);
+	});
+});
+
+describe("supervisor build id", () => {
+	it("tracks the chunks the entry imports and ignores unrelated siblings", () => {
+		const dir = mkdtempSync(join(tmpdir(), "cosmos-build-"));
+		mkdirSync(join(dir, "chunks"));
+		const entry = join(dir, "session-supervisor.js");
+		const chunk = join(dir, "chunks", "shared-abc123.js");
+		writeFileSync(entry, 'import { a } from "./chunks/shared-abc123.js";\nconsole.log(a);\n');
+		writeFileSync(chunk, "export const a = 1;\n");
+		writeFileSync(join(dir, "index.js"), "console.log('unrelated');\n");
+
+		const first = supervisorBuildId(entry);
+		expect(supervisorBuildId(entry)).toBe(first);
+
+		// The main-process bundle is not part of the supervisor's graph.
+		writeFileSync(join(dir, "index.js"), "console.log('unrelated, but changed');\n");
+		expect(supervisorBuildId(entry)).toBe(first);
+
+		writeFileSync(chunk, "export const a = 2;\n");
+		expect(supervisorBuildId(entry)).not.toBe(first);
+	});
+});
+
+describe("session file deletion", () => {
+	function withSessionRoot<T>(run: (root: string) => T): T {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-sessions-"));
+		const previous = process.env.PI_CODING_AGENT_SESSION_DIR;
+		process.env.PI_CODING_AGENT_SESSION_DIR = root;
+		try {
+			return run(root);
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+			else process.env.PI_CODING_AGENT_SESSION_DIR = previous;
+		}
+	}
+
+	it("tells a path outside the session folder apart from a file that is already gone", () => {
+		withSessionRoot((root) => {
+			const missing = join(root, "project", "gone.jsonl");
+			expect(isManagedSessionPath(missing)).toBe(true);
+			expect(isSessionFile(missing)).toBe(false);
+			expect(isManagedSessionPath(join(tmpdir(), "elsewhere.jsonl"))).toBe(false);
+		});
+	});
+
+	it("treats deleting an already-deleted session as a no-op but still rejects foreign paths", async () => {
+		const index = new SessionIndex(() => {});
+		try {
+			await withSessionRoot(async (root) => {
+				await expect(index.trash(join(root, "project", "gone.jsonl"))).resolves.toBeUndefined();
+				await expect(index.trash(join(tmpdir(), "elsewhere.jsonl"))).rejects.toThrow(/outside/);
+				await expect(index.trash(join(root, "notes.txt"))).rejects.toThrow(/Not a pi session file/);
+			});
+		} finally {
+			index.stop();
+		}
+	});
+});
+
+describe("clone failure reporting", () => {
+	it("names the cause instead of the fragment git happens to end on", () => {
+		// Verbatim output from `git clone` against a repo the user cannot see.
+		const output = [
+			"Cloning into '/tmp/staging'...",
+			"ERROR: Repository not found.",
+			"fatal: Could not read from remote repository.",
+			"",
+			"Please make sure you have the correct access rights",
+			"and the repository exists.",
+		].join("\n");
+		expect(lastMeaningfulLine(output)).toBe("Repository not found.");
+	});
+
+	it("keeps a cause that carries no ERROR or fatal prefix", () => {
+		const output = [
+			"git@github.com: Permission denied (publickey).",
+			"fatal: Could not read from remote repository.",
+			"Please make sure you have the correct access rights",
+			"and the repository exists.",
+		].join("\n");
+		expect(lastMeaningfulLine(output)).toBe(
+			"git@github.com: Permission denied (publickey).",
+		);
+	});
+
+	it("falls back to the boilerplate when git said nothing else", () => {
+		const output = "fatal: Could not read from remote repository.\n";
+		expect(lastMeaningfulLine(output)).toBe(
+			"fatal: Could not read from remote repository.",
+		);
+	});
+
+	it("ignores progress chatter when picking the failure line", () => {
+		const output = [
+			"Cloning into 'neutron'...",
+			"remote: Enumerating objects: 120, done.",
+			"Receiving objects:  100% (120/120), done.",
+			"fatal: destination path 'neutron' already exists and is not an empty directory.",
+		].join("\n");
+		expect(lastMeaningfulLine(output)).toBe(
+			"fatal: destination path 'neutron' already exists and is not an empty directory.",
+		);
+	});
+});
+
+describe("clone failure context", () => {
+	const url = "git@github.com:shipt/neutron.git";
+
+	it("names the org that was tried, which the card never shows", () => {
+		expect(cloneFailureMessage("Repository not found.", url, 128)).toBe(
+			`Repository not found. (${url})`,
+		);
+	});
+
+	it("does not repeat a URL git already quoted", () => {
+		const line = `fatal: repository '${url}' does not exist`;
+		expect(cloneFailureMessage(line, url, 128)).toBe(line);
+	});
+
+	it("falls back to the exit code when git printed nothing usable", () => {
+		expect(cloneFailureMessage("", url, 128)).toBe("git clone failed (exit 128)");
+		expect(cloneFailureMessage("", url, null)).toBe("git clone failed (exit unknown)");
+	});
+});
+
+describe("core repo list", () => {
+	// shipt/nebula never existed. It sat in this list unnoticed because the list
+	// started life as folder names to look for, and only later became the source
+	// of clone URLs, where a name that is merely wrong turns into a 404.
+	it("lists repos that exist, not folder labels", () => {
+		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
+			expect(isCoreRepoName(name)).toBe(true);
+		}
+		expect(isCoreRepoName("nebula")).toBe(false);
+	});
+
+	it("builds a clone URL for every core repo", () => {
+		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
+			expect(coreRepoCloneUrl(name)).toBe(`git@github.com:shipt/${name}.git`);
+		}
 	});
 });

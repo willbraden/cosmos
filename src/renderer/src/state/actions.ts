@@ -10,6 +10,7 @@ import {
 	PERMISSION_OPTIONS,
 	PERMISSION_PROMPT_MARKER,
 	type PermissionPromptPayload,
+	permissionNeedsApproval,
 	type SessionEntry,
 	type SessionState,
 	type SessionStats,
@@ -38,6 +39,7 @@ import {
 	updateTab,
 	useStore,
 } from "./store";
+import { tabsNeedPermissionModeSync } from "./permission-mode";
 
 const cmd = <T = unknown>(
 	tabId: string,
@@ -59,7 +61,10 @@ function applyLatestAssistantDuration(
 	return chat;
 }
 
-function suppressHiddenPrompts(chat: ChatState, hiddenPrompts: string[]): { chat: ChatState; hiddenPrompts: string[] } {
+function suppressHiddenPrompts(
+	chat: ChatState,
+	hiddenPrompts: string[],
+): { chat: ChatState; hiddenPrompts: string[] } {
 	if (hiddenPrompts.length === 0) return { chat, hiddenPrompts };
 	let items = chat.items;
 	const remaining = [...hiddenPrompts];
@@ -78,7 +83,10 @@ function suppressHiddenPrompts(chat: ChatState, hiddenPrompts: string[]): { chat
 			break;
 		}
 	}
-	return { chat: items === chat.items ? chat : { ...chat, items }, hiddenPrompts: remaining };
+	return {
+		chat: items === chat.items ? chat : { ...chat, items },
+		hiddenPrompts: remaining,
+	};
 }
 
 // ---- Boot ------------------------------------------------------------------
@@ -96,10 +104,14 @@ export async function bootstrap(): Promise<void> {
 	api.onSessionsChanged(() => void refreshSessions());
 	api.onSettingsChanged((next) => {
 		const prev = useStore.getState().settings;
+		const needsPermissionSync = tabsNeedPermissionModeSync(
+			Object.values(useStore.getState().tabs),
+			next.permissionMode,
+		);
 		useStore.setState({ settings: next });
 		applyTheme(next.theme);
-		if (prev.permissionMode !== next.permissionMode) {
-			void syncPermissionModeToOpenTabs(next.permissionMode);
+		if (needsPermissionSync) {
+			void applyPermissionModeToAllOpenSessions(next.permissionMode);
 		}
 		if (
 			prev.agentDirPath !== next.agentDirPath ||
@@ -146,7 +158,10 @@ async function restoreLiveSessions(live: LiveSessionState): Promise<boolean> {
 				status: "starting" as const,
 				isStreaming: tab.isStreaming,
 				isCompacting: tab.isCompacting,
-				dialogs: tab.dialogs.map((dialog) => ({ ...dialog, receivedAt: Date.now() })),
+				dialogs: tab.dialogs.map((dialog) => ({
+					...dialog,
+					receivedAt: Date.now(),
+				})),
 				statuses: tab.statuses,
 				widgets: tab.widgets,
 			},
@@ -155,12 +170,14 @@ async function restoreLiveSessions(live: LiveSessionState): Promise<boolean> {
 	const activeTabId =
 		live.visibleTabId && tabs[live.visibleTabId]
 			? live.visibleTabId
-			: [...live.tabs].sort((a, b) => b.openedAt - a.openedAt)[0]?.tabId ?? null;
+			: ([...live.tabs].sort((a, b) => b.openedAt - a.openedAt)[0]?.tabId ?? null);
 	useStore.setState({
 		tabs,
 		activeTabId,
 		pendingNewSession: false,
-		focusComposerTick: activeTabId ? useStore.getState().focusComposerTick + 1 : 0,
+		focusComposerTick: activeTabId
+			? useStore.getState().focusComposerTick + 1
+			: 0,
 	});
 	api.setVisibleSession(activeTabId);
 	await Promise.allSettled(live.tabs.map((tab) => loadTab(tab.tabId)));
@@ -173,9 +190,23 @@ export function applyTheme(theme: "system" | "light" | "dark"): void {
 	else document.documentElement.dataset.theme = theme;
 }
 
+/**
+ * Sessions hidden from the sidebar before the on-disk index catches up. The index
+ * rescans every session file behind a debounce, so a trashed row would otherwise linger
+ * for seconds. Each path clears itself once a refresh confirms it is gone.
+ */
+const trashedSessionPaths = new Set<string>();
+
 export async function refreshSessions(): Promise<void> {
 	try {
-		const sessions = await api.listSessions();
+		const listed = await api.listSessions();
+		for (const path of trashedSessionPaths) {
+			if (!listed.some((session) => session.path === path))
+				trashedSessionPaths.delete(path);
+		}
+		const sessions = listed.filter(
+			(session) => !trashedSessionPaths.has(session.path),
+		);
 		useStore.setState({ sessions, sessionsLoaded: true });
 		const query = useStore.getState().searchQuery;
 		if (query.trim()) await runSearch(query);
@@ -211,9 +242,9 @@ async function onCredentialsChanged(): Promise<void> {
 	if (tab && !tab.isStreaming) await loadTab(tab.tabId);
 }
 
-async function syncPermissionModeToOpenTabs(
+export async function applyPermissionModeToAllOpenSessions(
 	mode: PermissionMode,
-): Promise<void> {
+): Promise<number> {
 	const tabs = Object.values(useStore.getState().tabs);
 	useStore.setState((state) => ({
 		tabs: Object.fromEntries(
@@ -223,11 +254,13 @@ async function syncPermissionModeToOpenTabs(
 			]),
 		),
 	}));
+	const openTabs = tabs.filter((tab) => tab.opened);
 	await Promise.allSettled(
-		tabs
-			.filter((tab) => tab.opened)
-			.map((tab) => cmd(tab.tabId, { type: "desktop_set_permission_mode", mode })),
+		openTabs.map((tab) =>
+			cmd(tab.tabId, { type: "desktop_set_permission_mode", mode }),
+		),
 	);
+	return openTabs.length;
 }
 
 // ---- Opening sessions ------------------------------------------------------
@@ -297,9 +330,28 @@ export async function chooseFolderAndStart(): Promise<void> {
 	if (folder) await startNewSession(folder);
 }
 
-export function showWorkspaceDashboard(): void {
+export function showHome(): void {
 	useStore.setState({ activeTabId: null, pendingNewSession: true });
 	api.setVisibleSession(null);
+}
+
+/** Home composer: open a fresh session in `cwd` and send `prompt` as its first message. */
+export async function startSessionWithPrompt(
+	cwd: string,
+	prompt: string,
+): Promise<void> {
+	const text = prompt.trim();
+	if (!text) return;
+	const tabId = await startFreshSession(cwd);
+	if (!tabId) return;
+	const { settings, models } = useStore.getState();
+	const preferred = settings.defaultModel;
+	const model = preferred
+		? models.find((m) => m.provider === preferred.provider && m.id === preferred.id)
+		: undefined;
+	if (model && getTab(tabId)?.model?.id !== model.id) await setModel(tabId, model);
+	setDraft(tabId, text);
+	await sendDraft(tabId);
 }
 
 async function createTab(
@@ -371,11 +423,15 @@ export async function loadTab(tabId: string): Promise<void> {
 		useStore.setState({ models: models.models });
 		updateTab(tabId, (tab) => {
 			const suppressed = suppressHiddenPrompts(
-				mergeReloadedChat(tab.chat, chatFromEntries(entries.entries, entries.leafId)),
+				mergeReloadedChat(
+					tab.chat,
+					chatFromEntries(entries.entries, entries.leafId),
+				),
 				tab.hiddenPrompts,
 			);
 			const autoTitle =
-				tab.autoTitle || autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
+				tab.autoTitle ||
+				autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
 			return {
 				status: "ready",
 				error: undefined,
@@ -384,7 +440,9 @@ export async function loadTab(tabId: string): Promise<void> {
 				name: state.sessionName,
 				autoTitle,
 				model:
-					state.model && state.model.provider !== "unknown" ? state.model : undefined,
+					state.model && state.model.provider !== "unknown"
+						? state.model
+						: undefined,
 				thinkingLevel: state.thinkingLevel,
 				thinkingLevels: levels.levels,
 				isStreaming: state.isStreaming,
@@ -414,10 +472,14 @@ async function refreshAfterRun(tabId: string): Promise<void> {
 		updateTab(tabId, (tab) => {
 			const nextChat = tab.isStreaming
 				? tab.chat
-				: mergeReloadedChat(tab.chat, chatFromEntries(entries.entries, entries.leafId));
+				: mergeReloadedChat(
+						tab.chat,
+						chatFromEntries(entries.entries, entries.leafId),
+					);
 			const suppressed = suppressHiddenPrompts(nextChat, tab.hiddenPrompts);
 			const autoTitle =
-				tab.autoTitle || autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
+				tab.autoTitle ||
+				autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
 			return {
 				// A run that started while we were fetching owns the transcript now.
 				chat: suppressed.chat,
@@ -556,7 +618,8 @@ function handleEventBatch(batch: SessionEventBatch): void {
 	updateTab(batch.tabId, (tab) => {
 		const suppressed = suppressHiddenPrompts(chat, tab.hiddenPrompts);
 		const autoTitle =
-			tab.autoTitle || autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
+			tab.autoTitle ||
+			autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
 		return {
 			...patch,
 			autoTitle,
@@ -801,6 +864,63 @@ export function removeAttachment(tabId: string, id: string): void {
 	}));
 }
 
+function looksLikeFigmaPrompt(text: string): boolean {
+	const lower = text.toLowerCase();
+	if (lower.includes("figma.com/")) return true;
+	if (!lower.includes("figma")) return false;
+	return [
+		"file",
+		"frame",
+		"prototype",
+		"design",
+		"library",
+		"component",
+		"mockup",
+		"create",
+		"edit",
+		"update",
+		"import",
+		"export",
+		"sync",
+		"inspect",
+		"open",
+	].some((word) => lower.includes(word));
+}
+
+async function shouldGateForFigmaPrompt(text: string): Promise<string | null> {
+	if (!useStore.getState().settings.figmaChatContextGate) return null;
+	if (!looksLikeFigmaPrompt(text)) return null;
+	const overview = await api.getMcpOverview();
+	const figma = overview.servers.find(
+		(server) => server.name === "figma" && server.active,
+	);
+	if (!figma) {
+		return "This request needs the Figma MCP, but Cosmos cannot see the team-shared Figma server yet.";
+	}
+	if (figma.sessionAvailable === true) return null;
+	if (figma.sessionAvailabilityMessage) return figma.sessionAvailabilityMessage;
+	if (figma.oauthConnected) {
+		return "Cosmos found the Figma sign-in, but fresh sessions still are not loading the Figma tools.";
+	}
+	return "This request needs Figma access first. Connect Figma once, then Cosmos can continue from chat.";
+}
+
+async function sendPromptMessage(
+	tabId: string,
+	text: string,
+	attachments: Attachment[],
+	mode?: "steer" | "followUp",
+): Promise<void> {
+	const tab = getTab(tabId);
+	if (!tab) return;
+	const images: ImageContent[] = attachments.map((a) => a.image);
+	const command: Record<string, unknown> = { type: "prompt", message: text };
+	if (images.length) command.images = images;
+	if (tab.isStreaming)
+		command.streamingBehavior = mode ?? useStore.getState().settings.busySendMode;
+	await cmd(tabId, command as { type: string });
+}
+
 export async function sendDraft(
 	tabId: string,
 	mode?: "steer" | "followUp",
@@ -827,19 +947,77 @@ export async function sendDraft(
 		return;
 	}
 
-	updateTab(tabId, () => ({ draft: "", attachments: [] }));
-	const images: ImageContent[] = attachments.map((a) => a.image);
-	const command: Record<string, unknown> = { type: "prompt", message: text };
-	if (images.length) command.images = images;
-	if (tab.isStreaming)
-		command.streamingBehavior = mode ?? useStore.getState().settings.busySendMode;
 	try {
-		await cmd(tabId, command as { type: string });
+		const figmaBlockMessage = await shouldGateForFigmaPrompt(text);
+		if (figmaBlockMessage) {
+			updateTab(tabId, () => ({
+				draft: "",
+				attachments: [],
+				figmaAssist: {
+					blockedPrompt: text,
+					blockedAttachments: attachments,
+					message: figmaBlockMessage,
+				},
+			}));
+			return;
+		}
+	} catch (error) {
+		reportSendError(error);
+		return;
+	}
+
+	updateTab(tabId, () => ({ draft: "", attachments: [] }));
+	try {
+		await sendPromptMessage(tabId, text, attachments, mode);
 	} catch (error) {
 		// Put the message back so nothing typed is lost.
 		updateTab(tabId, (t) => ({
 			draft: t.draft ? `${text}\n\n${t.draft}` : text,
 			attachments: [...attachments, ...t.attachments],
+		}));
+		reportSendError(error);
+	}
+}
+
+export function dismissBlockedFigmaPrompt(
+	tabId: string,
+	restore = false,
+): void {
+	updateTab(tabId, (tab) => ({
+		figmaAssist: undefined,
+		draft: restore
+			? tab.draft
+				? `${tab.figmaAssist?.blockedPrompt ?? ""}\n\n${tab.draft}`
+				: (tab.figmaAssist?.blockedPrompt ?? "")
+			: tab.draft,
+		attachments: restore
+			? [...(tab.figmaAssist?.blockedAttachments ?? []), ...tab.attachments]
+			: tab.attachments,
+	}));
+}
+
+export async function retryBlockedFigmaPrompt(
+	tabId: string,
+	mode?: "steer" | "followUp",
+): Promise<void> {
+	const tab = getTab(tabId);
+	const blocked = tab?.figmaAssist;
+	if (!tab || !blocked) return;
+	updateTab(tabId, () => ({ figmaAssist: undefined }));
+	try {
+		await sendPromptMessage(
+			tabId,
+			blocked.blockedPrompt,
+			blocked.blockedAttachments,
+			mode,
+		);
+	} catch (error) {
+		updateTab(tabId, (current) => ({
+			figmaAssist: blocked,
+			draft: current.draft
+				? `${blocked.blockedPrompt}\n\n${current.draft}`
+				: blocked.blockedPrompt,
+			attachments: [...blocked.blockedAttachments, ...current.attachments],
 		}));
 		reportSendError(error);
 	}
@@ -1004,10 +1182,25 @@ export async function setPermissionMode(
 	try {
 		await cmd(tabId, { type: "desktop_set_permission_mode", mode });
 		updateTab(tabId, () => ({ permissionMode: mode }));
+		releaseDialogsAllowedBy(tabId, mode);
 		// New sessions start in the most recently chosen mode.
 		await api.updateSettings({ permissionMode: mode });
 	} catch (error) {
 		toast("error", errorMessage(error));
+	}
+}
+
+/**
+ * The new mode governs future tool calls, but a prompt already on screen is still parked on
+ * its own `ui.select`. Answer the ones the new mode would not have asked about so switching
+ * to Auto mid-turn actually stops the asking.
+ */
+function releaseDialogsAllowedBy(tabId: string, mode: PermissionMode): void {
+	for (const dialog of getTab(tabId)?.dialogs ?? []) {
+		const permission =
+			"title" in dialog ? parsePermissionPrompt(dialog.title) : null;
+		if (permission && !permissionNeedsApproval(mode, permission.toolName))
+			void answerPermission(tabId, dialog.id, "allow");
 	}
 }
 
@@ -1143,7 +1336,15 @@ async function showStats(tabId: string): Promise<void> {
 }
 
 export async function deleteSession(sessionPath: string): Promise<void> {
+	// Drop the row now. Waiting for the pi process to exit and for the on-disk index to
+	// rescan every session file leaves it sitting there for seconds.
+	trashedSessionPaths.add(sessionPath);
+	useStore.setState((state) => ({
+		sessions: state.sessions.filter((s) => s.path !== sessionPath),
+	}));
 	const tab = tabForSession(sessionPath);
+	// Still shut the process down before trashing, so pi cannot append to (and recreate)
+	// the session file afterwards. The sidebar no longer waits on it.
 	if (tab) await closeTab(tab.tabId);
 	try {
 		await api.deleteSession(sessionPath);
@@ -1154,8 +1355,18 @@ export async function deleteSession(sessionPath: string): Promise<void> {
 			});
 		toast("info", "Session moved to the Trash.");
 	} catch (error) {
+		trashedSessionPaths.delete(sessionPath);
+		void refreshSessions();
 		toast("error", errorMessage(error));
 	}
+}
+
+export async function confirmDeleteSession(
+	sessionPath: string,
+	title: string,
+): Promise<void> {
+	if (!window.confirm(`Move "${title}" to the Trash?`)) return;
+	await deleteSession(sessionPath);
 }
 
 export async function togglePin(sessionPath: string): Promise<void> {

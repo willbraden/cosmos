@@ -22,6 +22,12 @@ export interface Attachment {
 	image: ImageContent;
 }
 
+export interface FigmaAssistState {
+	blockedPrompt: string;
+	blockedAttachments: Attachment[];
+	message: string;
+}
+
 export interface TabState {
 	tabId: string;
 	openedAt: number;
@@ -52,6 +58,7 @@ export interface TabState {
 	draft: string;
 	attachments: Attachment[];
 	hiddenPrompts: string[];
+	figmaAssist?: FigmaAssistState;
 	unread: boolean;
 }
 
@@ -79,6 +86,7 @@ export interface AppStore {
 	models: Model[];
 	providers: ProviderInfo[];
 	settingsPane: SettingsPane | null;
+	feedbackOpen: boolean;
 	changesOpen: boolean;
 	toasts: Toast[];
 	focusComposerTick: number;
@@ -97,6 +105,7 @@ export const useStore = create<AppStore>(() => ({
 	models: [],
 	providers: [],
 	settingsPane: null,
+	feedbackOpen: false,
 	changesOpen: false,
 	toasts: [],
 	focusComposerTick: 0,
@@ -131,6 +140,7 @@ export function newTab(
 		draft: "",
 		attachments: [],
 		hiddenPrompts: [],
+		figmaAssist: undefined,
 		unread: false,
 	};
 }

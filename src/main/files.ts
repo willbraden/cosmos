@@ -6,13 +6,29 @@ import type { FileMatch } from "../shared/ipc";
 const CACHE_MS = 20_000;
 const MAX_FILES = 50_000;
 const MAX_RESULTS = 40;
-const SKIP_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", "out", ".venv", "venv", "__pycache__", "target", ".cache"]);
+const SKIP_DIRS = new Set([
+	".git",
+	"node_modules",
+	".next",
+	"dist",
+	"build",
+	"out",
+	".venv",
+	"venv",
+	"__pycache__",
+	"target",
+	".cache",
+]);
 
 const cache = new Map<string, { at: number; files: Promise<string[]> }>();
 
 /** Fuzzy file search inside a project, for `@` mentions in the composer. */
-export async function searchProjectFiles(cwd: string, query: string): Promise<FileMatch[]> {
-	if (typeof cwd !== "string" || !isAbsolute(cwd) || typeof query !== "string") return [];
+export async function searchProjectFiles(
+	cwd: string,
+	query: string,
+): Promise<FileMatch[]> {
+	if (typeof cwd !== "string" || !isAbsolute(cwd) || typeof query !== "string")
+		return [];
 	const files = await listFiles(cwd);
 	const q = query.toLowerCase();
 	const dirs = new Set<string>();
@@ -28,11 +44,17 @@ export async function searchProjectFiles(cwd: string, query: string): Promise<Fi
 		...files.map((f) => [f, false] as const),
 		...[...dirs].map((d) => [d, true] as const),
 	]) {
-		const score = q ? fuzzyScore(path.toLowerCase(), q) : isDirectory ? -path.length - 50 : -path.length;
+		const score = q
+			? fuzzyScore(path.toLowerCase(), q)
+			: isDirectory
+				? -path.length - 50
+				: -path.length;
 		if (score !== null) scored.push({ path, isDirectory, score });
 	}
 	scored.sort((a, b) => b.score - a.score || a.path.length - b.path.length);
-	return scored.slice(0, MAX_RESULTS).map(({ path, isDirectory }) => ({ path, isDirectory }));
+	return scored
+		.slice(0, MAX_RESULTS)
+		.map(({ path, isDirectory }) => ({ path, isDirectory }));
 }
 
 /**
@@ -48,11 +70,28 @@ export function fuzzyScore(path: string, query: string): number | null {
 		const index = path.indexOf(char, from);
 		if (index === -1) return null;
 		run = index === from ? run + 1 : 0;
-		score += 1 + run * 3 + (index >= nameStart ? 2 : 0) - Math.min(index - from, 10) * 0.1;
+		score +=
+			1 +
+			run * 3 +
+			(index >= nameStart ? 2 : 0) -
+			Math.min(index - from, 10) * 0.1;
 		from = index + 1;
 	}
 	if (path.slice(nameStart).startsWith(query)) score += 10;
 	return score - path.length * 0.01;
+}
+
+export async function listProjectFiles(
+	cwd: string,
+	dir = "",
+): Promise<string[]> {
+	if (typeof cwd !== "string" || !isAbsolute(cwd)) return [];
+	const normalized = normalizeRelativeDir(dir);
+	if (normalized === null) return [];
+	const files = await listFiles(cwd);
+	if (!normalized) return files;
+	const prefix = normalized.endsWith("/") ? normalized : `${normalized}/`;
+	return files.filter((file) => file.startsWith(prefix));
 }
 
 function listFiles(cwd: string): Promise<string[]> {
@@ -99,6 +138,22 @@ async function walk(root: string): Promise<string[]> {
 		}
 	}
 	return out;
+}
+
+function normalizeRelativeDir(dir: string): string | null {
+	const normalized = dir
+		.trim()
+		.replace(/^\.\//, "")
+		.replace(/\\/g, "/")
+		.replace(/^\/+|\/+$/g, "");
+	if (!normalized || normalized === ".") return "";
+	if (
+		normalized === ".." ||
+		normalized.startsWith("../") ||
+		normalized.includes("/../")
+	)
+		return null;
+	return normalized;
 }
 
 export async function isDirectory(path: string): Promise<boolean> {

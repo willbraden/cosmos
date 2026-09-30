@@ -11,7 +11,12 @@ import type {
 	SessionExit,
 	SessionWidgetState,
 } from "../../shared/ipc";
-import type { ExtensionUiRequest, PiRecord, SessionState } from "../../shared/pi-types";
+import type {
+	ExtensionUiRequest,
+	PiRecord,
+	SessionState,
+} from "../../shared/pi-types";
+import { PERMISSION_MODE_COMMAND } from "../../shared/pi-types";
 import { PiProcess } from "./pi-process";
 
 export interface HostEnvironment {
@@ -52,9 +57,19 @@ const SESSION_CHANGING = new Set([
 	"fork",
 	"clone",
 ]);
+const RESTART_SAFE_COMMANDS = new Set([
+	"get_state",
+	"get_entries",
+	"get_available_models",
+	"get_available_thinking_levels",
+	"get_commands",
+	"get_session_stats",
+]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VALID_MODES = new Set<PermissionMode>(["ask", "acceptEdits", "auto"]);
 const FLUSH_MS = 16;
+/** A live mode switch is a local extension command; if pi is wedged, fall back to a restart. */
+const MODE_SYNC_TIMEOUT_MS = 5_000;
 
 export class SessionHost {
 	private readonly tabs = new Map<string, Tab>();
@@ -126,13 +141,28 @@ export class SessionHost {
 		const tab = this.requireTab(tabId);
 		tab.lastActivity = Date.now();
 
-		// Desktop-only pseudo command: keep the chosen mode on the tab, then restart
-		// the pi process so the bridge extension re-reads PI_DESKTOP_PERMISSION_MODE.
+		// Desktop-only pseudo command. The bridge extension registers a slash command that
+		// updates its mode in place, and pi runs extension commands inline even mid-turn, so
+		// the change applies to the tool call that is prompting right now. Restarting the
+		// process (which re-reads PI_DESKTOP_PERMISSION_MODE) is only the fallback.
 		if (command.type === "desktop_set_permission_mode") {
 			const mode = command.mode as PermissionMode;
 			if (!VALID_MODES.has(mode)) throw new Error("Invalid permission mode");
 			tab.permissionMode = mode;
-			if (tab.proc?.running) {
+			const proc = tab.proc;
+			if (!proc?.running) return null;
+			try {
+				await proc.request(
+					{ type: "prompt", message: `/${PERMISSION_MODE_COMMAND} ${mode}` },
+					MODE_SYNC_TIMEOUT_MS,
+				);
+				tab.stale = false;
+			} catch (error) {
+				log.warn(
+					`[pi ${proc.pid}] live permission mode switch failed, falling back to restart: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
 				if (tab.busy || tab.openDialogs.size > 0) tab.stale = true;
 				else await this.suspend(tab, "permission mode changed");
 			}
@@ -146,10 +176,16 @@ export class SessionHost {
 			command.type === "follow_up"
 		)
 			tab.busy = true;
-		const data = await proc.request(command);
-		if (SESSION_CHANGING.has(command.type))
-			await this.refreshSessionPath(tab, proc);
-		return data;
+		try {
+			const data = await proc.request(command);
+			if (SESSION_CHANGING.has(command.type))
+				await this.refreshSessionPath(tab, proc);
+			return data;
+		} catch (error) {
+			if (!this.shouldRetryAfterRestart(command.type, error)) throw error;
+			const restarted = await this.ensureProcess(tab);
+			return await restarted.request(command);
+		}
 	}
 
 	respondToUi(tabId: string, response: Record<string, unknown>): void {
@@ -180,9 +216,10 @@ export class SessionHost {
 
 	snapshot(): LiveSessionState {
 		return {
-			visibleTabId: this.visibleTabId && this.tabs.has(this.visibleTabId)
-				? this.visibleTabId
-				: null,
+			visibleTabId:
+				this.visibleTabId && this.tabs.has(this.visibleTabId)
+					? this.visibleTabId
+					: null,
 			tabs: [...this.tabs.values()].map((tab) => ({
 				tabId: tab.id,
 				openedAt: tab.openedAt,
@@ -238,6 +275,15 @@ export class SessionHost {
 		return tab;
 	}
 
+	private shouldRetryAfterRestart(commandType: string, error: unknown): boolean {
+		if (!RESTART_SAFE_COMMANDS.has(commandType)) return false;
+		const message = error instanceof Error ? error.message : String(error);
+		return (
+			message.includes("pi exited (") ||
+			message.includes("pi process is not running")
+		);
+	}
+
 	private ensureProcess(tab: Tab): Promise<PiProcess> {
 		if (tab.proc?.running) return Promise.resolve(tab.proc);
 		tab.starting ??= this.startProcess(tab).finally(() => {
@@ -273,6 +319,10 @@ export class SessionHost {
 				...(process.env.GLAYVIN_HOME
 					? { GLAYVIN_HOME: process.env.GLAYVIN_HOME }
 					: {}),
+				// MCP servers that ship UI resources otherwise pop a browser tab,
+				// which sends the user out of Cosmos to read a tool result.
+				// Suppressing the viewer returns the result inline instead.
+				MCP_UI_VIEWER: baseEnv.MCP_UI_VIEWER ?? "none",
 				ELECTRON_RUN_AS_NODE: "1",
 				PI_DESKTOP: "1",
 				COSMOS_DESKTOP: "1",
@@ -380,12 +430,12 @@ export class SessionHost {
 				const { [record.widgetKey]: _old, ...rest } = tab.widgets;
 				tab.widgets = record.widgetLines?.length
 					? {
-						...rest,
-						[record.widgetKey]: {
-							lines: [...record.widgetLines],
-							placement: record.widgetPlacement ?? "aboveEditor",
-						},
-					}
+							...rest,
+							[record.widgetKey]: {
+								lines: [...record.widgetLines],
+								placement: record.widgetPlacement ?? "aboveEditor",
+							},
+						}
 					: rest;
 				break;
 			}

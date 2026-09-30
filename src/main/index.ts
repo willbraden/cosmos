@@ -33,13 +33,14 @@ import type {
 	DesktopSettings,
 	MenuCommand,
 	SessionMenuAction,
+	WorkspaceHealth,
 } from "../shared/ipc";
 import {
 	ensureCosmosManagedAgentDir,
 	isCosmosManagedAgentDir,
 } from "./agent-home";
 import { AuthService } from "./auth-service";
-import { isDirectory, searchProjectFiles } from "./files";
+import { isDirectory, listProjectFiles, searchProjectFiles } from "./files";
 import { buildAppMenu } from "./menu";
 import {
 	getMcpOverview,
@@ -67,11 +68,22 @@ import {
 	type RuntimePaths,
 } from "./glayvin-runtime";
 import { SessionIndex } from "./session-index";
-import { type SupervisorConfig } from "./session-supervisor-protocol";
+import type { SupervisorConfig } from "./session-supervisor-protocol";
 import { SessionSupervisorClient } from "./session-supervisor-client";
 import { SettingsStore } from "./settings";
 import { resolveShellEnv } from "./shell-env";
-import { inspectWorkspace, isPathInsideWorkspace } from "./workspace";
+import { getWorktreeSupport, previewManagedWorktree } from "./worktrees";
+import {
+	assertWorkspaceEntryName,
+	cloneWorkspaceRepo,
+	coreRepoCloneUrl,
+	inspectWorkspace,
+	isCoreRepoName,
+	isPathInsideWorkspace,
+	linkWorkspaceRepo,
+	unlinkWorkspaceRepo,
+	workspaceEntryPath,
+} from "./workspace";
 
 // ---- Observability: persistent logs + local crash dumps from the first line ----
 log.initialize();
@@ -118,6 +130,39 @@ function refreshAppMenu(): void {
 
 function resolveWorkspaceRootPath(settingsValue: DesktopSettings): string {
 	return settingsValue.workspaceRootPath || join(homedir(), "Cosmos");
+}
+
+function currentWorkspaceHealth(): WorkspaceHealth {
+	const current = settings.get();
+	return inspectWorkspace(
+		resolveWorkspaceRootPath(current),
+		current.coreRepoOrg,
+	);
+}
+
+/** Repos with a clone in flight, so a double-click cannot start two of them. */
+const cloningRepos = new Set<string>();
+
+/**
+ * Folder picker for symlink targets. Unlike `dialog:pick-folder` this deliberately
+ * allows folders outside the workspace root, since the point is to link one in.
+ */
+async function pickLinkTarget(
+	event: Electron.IpcMainInvokeEvent,
+	title: string,
+): Promise<string | null> {
+	const win = BrowserWindow.fromWebContents(event.sender);
+	const options = {
+		title,
+		defaultPath: homedir(),
+		buttonLabel: "Link",
+		properties: ["openDirectory" as const],
+	};
+	const result = win
+		? await dialog.showOpenDialog(win, options)
+		: await dialog.showOpenDialog(options);
+	const chosen = result.canceled ? null : (result.filePaths[0] ?? null);
+	return chosen ? resolve(chosen) : null;
 }
 
 function sessionSupervisorSocketPath(): string {
@@ -183,7 +228,9 @@ async function annotateMcpSessionAvailability(
 				...(process.env.PI_CODING_AGENT_DIR
 					? { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR }
 					: {}),
-				...(process.env.GLAYVIN_HOME ? { GLAYVIN_HOME: process.env.GLAYVIN_HOME } : {}),
+				...(process.env.GLAYVIN_HOME
+					? { GLAYVIN_HOME: process.env.GLAYVIN_HOME }
+					: {}),
 				ELECTRON_RUN_AS_NODE: "1",
 				PI_DESKTOP: "1",
 				COSMOS_DESKTOP: "1",
@@ -201,12 +248,12 @@ async function annotateMcpSessionAvailability(
 			servers: overview.servers.map((server) =>
 				server.name === figma.name
 					? {
-						...server,
-						sessionAvailable: matches,
-						sessionAvailabilityMessage: matches
-							? "Fresh sessions can see the Figma tools."
-							: "Cosmos found the Figma sign-in, but a fresh Pi session still did not load the Figma tools.",
-					}
+							...server,
+							sessionAvailable: matches,
+							sessionAvailabilityMessage: matches
+								? "Fresh sessions can see the Figma tools."
+								: "Cosmos found the Figma sign-in, but a fresh Pi session still did not load the Figma tools.",
+						}
 					: server,
 			),
 		};
@@ -216,13 +263,13 @@ async function annotateMcpSessionAvailability(
 			servers: overview.servers.map((server) =>
 				server.name === figma.name
 					? {
-						...server,
-						sessionAvailable: false,
-						sessionAvailabilityMessage:
-							error instanceof Error
-								? `Cosmos could not verify Figma in a fresh session: ${error.message}`
-								: "Cosmos could not verify Figma in a fresh session.",
-					}
+							...server,
+							sessionAvailable: false,
+							sessionAvailabilityMessage:
+								error instanceof Error
+									? `Cosmos could not verify Figma in a fresh session: ${error.message}`
+									: "Cosmos could not verify Figma in a fresh session.",
+						}
 					: server,
 			),
 		};
@@ -263,9 +310,7 @@ function resolveRuntimePaths(paths: RuntimePaths): {
 function getSeedAgentDirs(): string[] {
 	return [
 		INITIAL_PI_CODING_AGENT_DIR,
-		INITIAL_GLAYVIN_HOME
-			? join(INITIAL_GLAYVIN_HOME, ".pi", "agent")
-			: undefined,
+		INITIAL_GLAYVIN_HOME ? join(INITIAL_GLAYVIN_HOME, ".pi", "agent") : undefined,
 		join(homedir(), ".pi", "agent"),
 	].filter(
 		(path): path is string => typeof path === "string" && path.length > 0,
@@ -354,7 +399,9 @@ async function start(): Promise<void> {
 				if (runtimePathsChanged || workspaceRootChanged)
 					return host.restartForNewCredentials();
 			})
-			.catch((error) => log.error("Could not reconfigure session supervisor", error));
+			.catch((error) =>
+				log.error("Could not reconfigure session supervisor", error),
+			);
 	});
 
 	// Resolve the login-shell environment early; the first session waits on it anyway.
@@ -371,6 +418,10 @@ async function start(): Promise<void> {
 				for (const batch of batches) send("session:events", batch);
 			},
 			exit: (exit) => send("session:exit", exit),
+		},
+		log: {
+			info: (message) => log.info(message),
+			warn: (message) => log.warn(message),
 		},
 	});
 	await host.start(buildSupervisorConfig(settings.get(), workspaceRoot));
@@ -544,12 +595,67 @@ function registerIpc(): void {
 	ipcMain.handle("settings:update", (_e, patch: unknown) =>
 		settings.update(patch),
 	);
-	ipcMain.handle("workspace:health", () =>
-		inspectWorkspace(resolveWorkspaceRootPath(settings.get())),
-	);
+	ipcMain.handle("workspace:health", () => currentWorkspaceHealth());
+	ipcMain.handle("workspace:clone-repo", async (_e, name: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(name ?? ""));
+		if (!isCoreRepoName(repoName)) {
+			throw new Error(`${repoName} is not one of the core company repos.`);
+		}
+		if (cloningRepos.has(repoName)) {
+			throw new Error(`${repoName} is already being cloned.`);
+		}
+		const current = settings.get();
+		const rootPath = resolveWorkspaceRootPath(current);
+		cloningRepos.add(repoName);
+		try {
+			send("workspace:progress", { name: repoName, message: "Starting clone…" });
+			await cloneWorkspaceRepo({
+				rootPath,
+				name: repoName,
+				url: coreRepoCloneUrl(repoName, current.coreRepoOrg),
+				env: await resolveShellEnv(),
+				onProgress: (message) =>
+					send("workspace:progress", { name: repoName, message }),
+			});
+			log.info(`Cloned ${repoName} into ${rootPath}`);
+			return currentWorkspaceHealth();
+		} finally {
+			cloningRepos.delete(repoName);
+			send("workspace:progress", { name: repoName, message: "" });
+		}
+	});
+	ipcMain.handle("workspace:link-repo", async (event, name: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(name ?? ""));
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		const targetPath = await pickLinkTarget(event, `Choose the existing ${repoName} checkout`);
+		if (!targetPath) return currentWorkspaceHealth();
+		linkWorkspaceRepo({ rootPath, name: repoName, targetPath });
+		log.info(`Linked ${rootPath}/${repoName} -> ${targetPath}`);
+		return currentWorkspaceHealth();
+	});
+	ipcMain.handle("workspace:link-existing", async (event) => {
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		const targetPath = await pickLinkTarget(
+			event,
+			"Choose an existing project folder to link into the workspace",
+		);
+		if (!targetPath) return null;
+		const name = assertWorkspaceEntryName(basename(targetPath));
+		linkWorkspaceRepo({ rootPath, name, targetPath });
+		log.info(`Linked ${rootPath}/${name} -> ${targetPath}`);
+		return currentWorkspaceHealth();
+	});
+	ipcMain.handle("workspace:unlink-repo", (_e, name: unknown) => {
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		unlinkWorkspaceRepo(rootPath, String(name ?? ""));
+		return currentWorkspaceHealth();
+	});
 	ipcMain.handle("mcp:overview", async () => {
 		const agentDir = getAgentDir();
-		const overview = await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir);
+		const overview = await getMcpOverview(
+			resolveCurrentGlayvinHome(agentDir),
+			agentDir,
+		);
 		return annotateMcpSessionAvailability(overview);
 	});
 	ipcMain.handle("figma:xcode-status", async () =>
@@ -568,18 +674,21 @@ function registerIpc(): void {
 		await host.restartForNewCredentials();
 		return result;
 	});
-	ipcMain.handle("mcp:upsert-personal", async (_e, name: unknown, config: unknown) => {
-		const agentDir = getAgentDir();
-		upsertPersonalMcpServer(
-			resolveCurrentGlayvinHome(agentDir),
-			String(name ?? ""),
-			config,
-		);
-		await host.restartForNewCredentials();
-		return annotateMcpSessionAvailability(
-			await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir),
-		);
-	});
+	ipcMain.handle(
+		"mcp:upsert-personal",
+		async (_e, name: unknown, config: unknown) => {
+			const agentDir = getAgentDir();
+			upsertPersonalMcpServer(
+				resolveCurrentGlayvinHome(agentDir),
+				String(name ?? ""),
+				config,
+			);
+			await host.restartForNewCredentials();
+			return annotateMcpSessionAvailability(
+				await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir),
+			);
+		},
+	);
 	ipcMain.handle("mcp:remove-personal", async (_e, name: unknown) => {
 		const agentDir = getAgentDir();
 		removePersonalMcpServer(
@@ -598,31 +707,6 @@ function registerIpc(): void {
 	);
 	ipcMain.handle("sessions:delete", (_e, path: unknown) =>
 		sessions.trash(requireAbsolute(path)),
-	);
-	ipcMain.handle(
-		"sessions:context-menu",
-		(event, path: unknown, pinned: unknown) => {
-			requireAbsolute(path);
-			return new Promise<SessionMenuAction | null>((resolve) => {
-				let chosen: SessionMenuAction | null = null;
-				const item = (label: string, action: SessionMenuAction) => ({
-					label,
-					click: () => (chosen = action),
-				});
-				const menu = Menu.buildFromTemplate([
-					item("Rename…", "rename"),
-					item(pinned ? "Unpin" : "Pin to Top", pinned ? "unpin" : "pin"),
-					{ type: "separator" },
-					item("Export as HTML…", "exportHtml"),
-					item("Reveal Session File in Finder", "reveal"),
-					item("Copy Session Path", "copyPath"),
-					{ type: "separator" },
-					item("Move to Trash…", "delete"),
-				]);
-				const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
-				menu.popup({ window: win, callback: () => resolve(chosen) });
-			});
-		},
 	);
 
 	ipcMain.handle("session:open", async (_e, request: unknown) => {
@@ -700,31 +784,15 @@ function registerIpc(): void {
 	});
 	ipcMain.handle("workspace:create-experiment", (_event, name: unknown) => {
 		if (typeof name !== "string") throw new Error("Experiment name is required");
-		const trimmed = name.trim();
-		if (!trimmed) throw new Error("Enter an experiment name");
-		if (
-			trimmed === "." ||
-			trimmed === ".." ||
-			/[\\/]/.test(trimmed) ||
-			/[\0]/.test(trimmed)
-		) {
-			throw new Error(
-				"Use a single folder name without slashes, '..', or hidden control characters",
-			);
-		}
+		const trimmed = assertWorkspaceEntryName(name);
 		const workspaceRoot = resolveWorkspaceRootPath(settings.get());
-		const experimentPath = resolve(join(workspaceRoot, trimmed));
-		if (!isPathInsideWorkspace(experimentPath, workspaceRoot)) {
-			throw new Error(
-				`Create experiments inside ${workspaceRoot}. Cosmos is locked to the company workspace.`,
-			);
-		}
+		const experimentPath = workspaceEntryPath(workspaceRoot, trimmed);
 		if (existsSync(experimentPath)) {
 			throw new Error(
 				`A folder named ${trimmed} already exists in ${workspaceRoot}.`,
 			);
 		}
-		mkdirSync(experimentPath, { recursive: false });
+		mkdirSync(experimentPath, { recursive: true });
 		return experimentPath;
 	});
 	ipcMain.handle("dialog:save", async (event, defaultName: unknown) => {
@@ -745,6 +813,22 @@ function registerIpc(): void {
 	});
 	ipcMain.handle("files:search", (_e, cwd: unknown, query: unknown) =>
 		searchProjectFiles(requireAbsolute(cwd), String(query ?? "")),
+	);
+	ipcMain.handle("files:list", (_e, cwd: unknown, dir: unknown) =>
+		listProjectFiles(requireAbsolute(cwd), typeof dir === "string" ? dir : ""),
+	);
+	ipcMain.handle("worktrees:support", (_e, cwd: unknown) =>
+		getWorktreeSupport(requireAbsolute(cwd), app.getPath("userData")),
+	);
+	ipcMain.handle(
+		"worktrees:preview",
+		(_e, cwd: unknown, taskGroupId: unknown, workerId: unknown) =>
+			previewManagedWorktree(
+				requireAbsolute(cwd),
+				app.getPath("userData"),
+				String(taskGroupId ?? ""),
+				String(workerId ?? ""),
+			),
 	);
 
 	ipcMain.handle("shell:open-path", async (_e, path: unknown) => {

@@ -6,10 +6,18 @@ import type { ExtensionUiRequest, PiRecord } from "./pi-types";
 export type PermissionMode = "ask" | "acceptEdits" | "auto";
 export type ThemePreference = "system" | "light" | "dark";
 
+/** Identifies a model well enough to re-select it; the full record comes from pi. */
+export interface ModelRef {
+	provider: string;
+	id: string;
+}
+
 export interface DesktopSettings {
 	theme: ThemePreference;
 	/** Permission mode applied to new sessions. */
 	permissionMode: PermissionMode;
+	/** Model applied to sessions started from Home. Null uses pi's own default. */
+	defaultModel: ModelRef | null;
 	notifications: boolean;
 	/** Minutes a background, idle session keeps its pi process before it is suspended. 0 disables suspension. */
 	idleSuspendMinutes: number;
@@ -21,6 +29,8 @@ export interface DesktopSettings {
 	glayvinHomePath: string;
 	/** Absolute path to the Cosmos workspace root. Empty uses ~/Cosmos. */
 	workspaceRootPath: string;
+	/** GitHub org used to build clone URLs for the core company repos. Empty uses the built-in default. */
+	coreRepoOrg: string;
 	/** Session file paths pinned to the top of the sidebar. */
 	pinnedSessions: string[];
 	/** Manual per-folder session order for sidebar accordion sections. */
@@ -32,23 +42,28 @@ export interface DesktopSettings {
 	sidebarCollapsed: boolean;
 	/** Enables hidden developer-only tools like UI inspect mode. */
 	developerMode: boolean;
+	/** When enabled, Cosmos can use chat context to pause likely Figma-design prompts until Figma MCP is available. */
+	figmaChatContextGate: boolean;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
 	theme: "system",
 	permissionMode: "ask",
+	defaultModel: null,
 	notifications: true,
 	idleSuspendMinutes: 15,
 	piCliPath: "",
 	agentDirPath: "",
 	glayvinHomePath: "",
 	workspaceRootPath: "",
+	coreRepoOrg: "",
 	pinnedSessions: [],
 	sidebarSessionOrder: {},
 	recentProjects: [],
 	busySendMode: "steer",
 	sidebarCollapsed: false,
 	developerMode: false,
+	figmaChatContextGate: false,
 };
 
 export interface SessionSummary {
@@ -83,6 +98,18 @@ export interface WorkspaceRepoHealth {
 	exists: boolean;
 	isDirectory: boolean;
 	isGitRepo: boolean;
+	/** True when the workspace entry is a symlink pointing at a checkout elsewhere. */
+	isSymlink: boolean;
+	/** Absolute target of the symlink, when `isSymlink` is true. */
+	linkTarget?: string;
+	/** Clone URL for the curated core repos. Absent for experiments. */
+	cloneUrl?: string;
+}
+
+/** Streamed while a long-running workspace operation (currently `git clone`) runs. */
+export interface WorkspaceProgress {
+	name: string;
+	message: string;
 }
 
 export interface WorkspaceHealth {
@@ -94,6 +121,15 @@ export interface WorkspaceHealth {
 	/** Other sibling directories under the workspace root, treated as experiments. */
 	experiments: WorkspaceRepoHealth[];
 	readyRepos: number;
+}
+
+export interface WorktreeSupport {
+	available: boolean;
+	repoPath: string;
+	managedRoot: string;
+	gitBinary: boolean;
+	isGitRepo: boolean;
+	reason?: string;
 }
 
 export interface McpServerDefinition {
@@ -262,10 +298,12 @@ export type MenuCommand =
 	| "stop"
 	| "compact"
 	| "export-html"
+	| "trash-session"
 	| "next-session"
 	| "prev-session"
 	| "focus-composer"
-	| "reset-figma";
+	| "reset-figma"
+	| "share-feedback";
 
 /** Surface exposed on `window.pi` by the preload script. */
 export interface DesktopApi {
@@ -273,6 +311,14 @@ export interface DesktopApi {
 	getSettings(): Promise<DesktopSettings>;
 	updateSettings(patch: Partial<DesktopSettings>): Promise<DesktopSettings>;
 	getWorkspaceHealth(): Promise<WorkspaceHealth>;
+	/** `git clone` a curated core repo into the workspace root. */
+	cloneWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
+	/** Pick an existing checkout anywhere on disk and symlink it into the workspace root. */
+	linkWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
+	/** Pick any folder and symlink it into the workspace root under its own name. */
+	linkExistingProject(): Promise<WorkspaceHealth | null>;
+	/** Remove a workspace symlink. Never touches real directories. */
+	unlinkWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
 	getMcpOverview(): Promise<McpConfigOverview>;
 	getFigmaXcodeAuthStatus(): Promise<FigmaXcodeAuthStatus>;
 	launchFigmaXcodePluginInstall(): Promise<void>;
@@ -302,6 +348,13 @@ export interface DesktopApi {
 	pickFolder(): Promise<string | null>;
 	createExperiment(name: string): Promise<string>;
 	searchFiles(cwd: string, query: string): Promise<FileMatch[]>;
+	getWorktreeSupport(cwd: string): Promise<WorktreeSupport>;
+	previewManagedWorktree(
+		cwd: string,
+		taskGroupId: string,
+		workerId: string,
+	): Promise<{ path: string; branch: string }>;
+	listFiles(cwd: string, dir?: string): Promise<string[]>;
 	/** Absolute path of a file dropped or pasted from Finder ("" if it has none). */
 	getPathForFile(file: File): string;
 	openPath(path: string): Promise<void>;
@@ -325,6 +378,7 @@ export interface DesktopApi {
 	onSessionEvents(listener: (batch: SessionEventBatch) => void): () => void;
 	onSessionExit(listener: (exit: SessionExit) => void): () => void;
 	onSessionsChanged(listener: () => void): () => void;
+	onWorkspaceProgress(listener: (progress: WorkspaceProgress) => void): () => void;
 	onAuthEvent(listener: (event: AuthProgressEvent) => void): () => void;
 	onAuthPrompt(listener: (prompt: AuthPromptRequest) => void): () => void;
 	onAuthChanged(listener: () => void): () => void;

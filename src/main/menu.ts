@@ -92,6 +92,12 @@ export function buildAppMenu(
 			submenu: [
 				cmd("Stop", "stop", "CmdOrCtrl+."),
 				cmd("Compact Context", "compact", "CmdOrCtrl+Shift+K"),
+				{ type: "separator" },
+				cmd(
+					"Move Session to Trash…",
+					"trash-session",
+					isMac ? "Command+Backspace" : undefined,
+				),
 			],
 		},
 	);
@@ -117,6 +123,8 @@ export function buildAppMenu(
 		{
 			role: "help",
 			submenu: [
+				cmd("Share Feedback…", "share-feedback"),
+				{ type: "separator" },
 				{
 					label: "Pi Documentation",
 					click: () => void shell.openExternal("https://pi.dev/docs/latest"),
