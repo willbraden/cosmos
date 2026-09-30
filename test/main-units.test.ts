@@ -56,6 +56,7 @@ import {
 	coreRepoCloneUrl,
 	inspectWorkspace,
 	linkWorkspaceRepo,
+	lastMeaningfulLine,
 	unlinkWorkspaceRepo,
 } from "../src/main/workspace";
 import {
@@ -703,5 +704,51 @@ describe("session file deletion", () => {
 		} finally {
 			index.stop();
 		}
+	});
+});
+
+describe("clone failure reporting", () => {
+	it("names the cause instead of the fragment git happens to end on", () => {
+		// Verbatim output from `git clone` against a repo the user cannot see.
+		const output = [
+			"Cloning into '/tmp/staging'...",
+			"ERROR: Repository not found.",
+			"fatal: Could not read from remote repository.",
+			"",
+			"Please make sure you have the correct access rights",
+			"and the repository exists.",
+		].join("\n");
+		expect(lastMeaningfulLine(output)).toBe("Repository not found.");
+	});
+
+	it("keeps a cause that carries no ERROR or fatal prefix", () => {
+		const output = [
+			"git@github.com: Permission denied (publickey).",
+			"fatal: Could not read from remote repository.",
+			"Please make sure you have the correct access rights",
+			"and the repository exists.",
+		].join("\n");
+		expect(lastMeaningfulLine(output)).toBe(
+			"git@github.com: Permission denied (publickey).",
+		);
+	});
+
+	it("falls back to the boilerplate when git said nothing else", () => {
+		const output = "fatal: Could not read from remote repository.\n";
+		expect(lastMeaningfulLine(output)).toBe(
+			"fatal: Could not read from remote repository.",
+		);
+	});
+
+	it("ignores progress chatter when picking the failure line", () => {
+		const output = [
+			"Cloning into 'nebula'...",
+			"remote: Enumerating objects: 120, done.",
+			"Receiving objects:  100% (120/120), done.",
+			"fatal: destination path 'nebula' already exists and is not an empty directory.",
+		].join("\n");
+		expect(lastMeaningfulLine(output)).toBe(
+			"fatal: destination path 'nebula' already exists and is not an empty directory.",
+		);
 	});
 });

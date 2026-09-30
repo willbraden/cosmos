@@ -295,18 +295,28 @@ export function unlinkWorkspaceRepo(rootPath: string, name: string): void {
 	unlinkSync(linkPath);
 }
 
-function lastMeaningfulLine(text: string): string {
+const CLONE_PROGRESS_NOISE =
+	/^(Cloning into|Receiving|Resolving|Updating files|remote: (Counting|Compressing|Enumerating|Total))/;
+
+/**
+ * git closes a failed clone with "fatal: Could not read from remote repository."
+ * and a sentence about access rights that wraps across two lines. None of it
+ * names the cause, and the final line is a fragment ("and the repository
+ * exists."), so reporting it verbatim tells you nothing.
+ */
+const CLONE_FAILURE_BOILERPLATE =
+	/^(fatal: Could not read from remote repository\.?|Please make sure you have the correct access rights|and the repository exists\.?)$/;
+
+export function lastMeaningfulLine(text: string): string {
 	const lines = text
 		.split(/[\r\n]+/)
 		.map((line) => line.trim())
-		.filter(
-			(line) =>
-				line &&
-				!/^(Cloning into|Receiving|Resolving|Updating files|remote: (Counting|Compressing|Enumerating|Total))/.test(
-					line,
-				),
-		);
-	return lines[lines.length - 1] ?? "";
+		.filter((line) => line && !CLONE_PROGRESS_NOISE.test(line));
+	// Fall back to the boilerplate only when git gave us nothing else.
+	const named = lines.filter((line) => !CLONE_FAILURE_BOILERPLATE.test(line));
+	const chosen = named.length > 0 ? named : lines;
+	// "ERROR:" is GitHub's own prefix and adds nothing once this is a toast.
+	return (chosen[chosen.length - 1] ?? "").replace(/^ERROR:\s*/, "");
 }
 
 /** True for anything at `path`, including a symlink whose target is missing. */
