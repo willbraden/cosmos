@@ -1033,6 +1033,10 @@ describe("team classification", () => {
 	const classOf = (repo: string) =>
 		classifyRoot(repo, REAL_ROOTS[repo]).classification;
 
+	// Canary. These four are known-good team layers, captured from the real org and
+	// re-verified against live GitHub. If this fails, the classifier has drifted and
+	// discovery will return a plausible-looking but wrong "nothing found" — check
+	// LAYER_MARKERS and the layers >= 3 threshold before trusting an empty pane.
 	it("accepts the real team layers in the org", () => {
 		for (const repo of [
 			"business-reports-team-context",
@@ -1126,7 +1130,7 @@ describe("team search parsing", () => {
 		const hits = parseSearchHits(
 			JSON.stringify([item(), item({ repo: "other", path: "nested/disabled.json" })]),
 		);
-		expect(hits.map((h) => h.repo)).toEqual(["designos"]);
+		expect(hits.hits.map((h) => h.repo)).toEqual(["designos"]);
 	});
 
 	it("drops forks and invalid repo names", () => {
@@ -1137,11 +1141,11 @@ describe("team search parsing", () => {
 				item(),
 			]),
 		);
-		expect(hits.map((h) => h.repo)).toEqual(["designos"]);
+		expect(hits.hits.map((h) => h.repo)).toEqual(["designos"]);
 	});
 
 	it("discards GitHub's placeholder descriptions", () => {
-		const [hit] = parseSearchHits(
+		const { hits: [hit] } = parseSearchHits(
 			JSON.stringify([
 				item({ repo: "glayvin-delivery", description: "Default description for glayvin-delivery" }),
 			]),
@@ -1149,8 +1153,21 @@ describe("team search parsing", () => {
 		expect(hit.description).toBeUndefined();
 	});
 
-	it("survives a reply that is not JSON", () => {
-		expect(parseSearchHits("gh: rate limit exceeded")).toEqual([]);
+	// `gh` exits 0 while printing this, so an unreadable reply must not look like an
+	// org with no teams. `gh search code` returning `[]` is the real-world case.
+	it("marks a reply that is not JSON as unreadable", () => {
+		expect(parseSearchHits("gh: rate limit exceeded")).toEqual({
+			hits: [],
+			readable: false,
+		});
+	});
+
+	it("marks JSON that is not an array as unreadable", () => {
+		expect(parseSearchHits('{"message":"Not Found"}').readable).toBe(false);
+	});
+
+	it("treats an empty array as a readable, genuinely empty result", () => {
+		expect(parseSearchHits("[]")).toEqual({ hits: [], readable: true });
 	});
 
 	it("unions the marker searches and keeps the best description", () => {
@@ -1400,6 +1417,62 @@ describe("team discovery", () => {
 		expect(result.teams[0].markers).toEqual([]);
 	});
 
+	// The failure this guards: `gh search code` prints `[]` and exits 0 on this org.
+	// Treated as an empty match it becomes a confident, wrong "no teams found".
+	it("treats an unreadable search reply as a failure, not an empty org", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{
+				match: (_f, a) => a.some((x) => x.includes("/search/code")),
+				reply: ok('{"message":"Not Found"}'),
+			},
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		const note = result.notes.join(" ");
+		expect(note).toContain("could not read the reply");
+		expect(note).not.toContain("No repos in shipt");
+	});
+
+	// Matching repos while confirming none of them is what a stale classifier looks
+	// like. They still render, hedged, so the note explains the hedge.
+	it("flags a search that confirmed none of what it matched", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			...happyHandlers.slice(0, 3),
+			{
+				match: (_f, a) => a.some((x) => x.includes("contents")),
+				reply: ok(REAL_ROOTS.locations.join("\n")),
+			},
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.survey).toMatchObject({ matched: 1, teams: 0, uncertain: 1 });
+		expect(result.notes.join(" ")).toContain("could not confirm any of them");
+	});
+
+	it("counts what it classified so an empty pane can explain itself", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const result = await discoverTeams(
+			baseOptions(dir, fakeRunner(happyHandlers).run),
+		);
+		expect(result.survey).toMatchObject({ matched: 1, teams: 1, uncertain: 0 });
+		expect(result.survey?.markers).toContain("copilot-instructions.md");
+		// A healthy result should not be nagging about anything.
+		expect(result.notes.join(" ")).not.toContain("could not confirm");
+	});
+
+	it("keeps the survey when serving from cache", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+		const cached = await discoverTeams(
+			baseOptions(dir, fakeRunner(happyHandlers).run),
+		);
+		expect(cached.fromCache).toBe(true);
+		expect(cached.survey).toMatchObject({ matched: 1, teams: 1 });
+	});
+
 	it("falls back to the default org when the setting is unusable", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "teams-"));
 		const result = await discoverTeams({
@@ -1419,7 +1492,13 @@ describe("team discovery", () => {
 		const result = await discoverTeams(baseOptions(dir, run));
 		expect(result.available).toBe(true);
 		expect(result.teams).toEqual([]);
-		expect(result.notes.join(" ")).toContain("No team config repos");
+		// An empty result has to say what it looked for, or it is indistinguishable
+		// from a search that did not work.
+		const note = result.notes.join(" ");
+		expect(note).toContain("No repos in shipt");
+		expect(note).toContain("mcp-config.json");
+		expect(note).toContain("copilot-instructions.md");
+		expect(result.survey).toMatchObject({ matched: 0, teams: 0, uncertain: 0 });
 	});
 });
 

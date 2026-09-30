@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import type {
 	DiscoveredTeam,
 	TeamDiscovery,
+	TeamSurvey,
 	TeamMarker,
 	TeamMembership,
 } from "../shared/ipc";
@@ -178,16 +179,26 @@ function cleanDescription(value: unknown, repo: string): string | undefined {
 	return trimmed;
 }
 
+export interface SearchReply {
+	hits: SearchHit[];
+	/**
+	 * False when the reply was not a JSON array at all. `gh` exits 0 in that case, so
+	 * without this an output-format change is indistinguishable from an org with no
+	 * teams — which is exactly how `gh search code` silently returns nothing here.
+	 */
+	readable: boolean;
+}
+
 /** Parse one search reply, keeping only root-level hits in valid, non-forked repos. */
-export function parseSearchHits(stdout: string): SearchHit[] {
+export function parseSearchHits(stdout: string): SearchReply {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(stdout);
 	} catch {
-		return [];
+		return { hits: [], readable: false };
 	}
-	if (!Array.isArray(parsed)) return [];
-	return parsed.flatMap((entry) => {
+	if (!Array.isArray(parsed)) return { hits: [], readable: false };
+	const hits = parsed.flatMap((entry) => {
 		const raw = entry as Record<string, unknown>;
 		const repo = typeof raw.repo === "string" ? raw.repo : "";
 		const path = typeof raw.path === "string" ? raw.path : "";
@@ -203,6 +214,7 @@ export function parseSearchHits(stdout: string): SearchHit[] {
 			},
 		];
 	});
+	return { hits, readable: true };
 }
 
 /** Union hits from every marker search, keeping the first description seen per repo. */
@@ -412,6 +424,21 @@ export function resolveMembership(
 }
 
 
+/**
+ * Count what the search produced, so an empty or hedged pane can say why it looks
+ * that way rather than leaving the reader to guess whether it worked.
+ */
+function surveyOf(candidates: readonly TeamCandidate[]): TeamSurvey {
+	const count = (kind: TeamCandidate["classification"]) =>
+		candidates.filter((c) => c.classification === kind).length;
+	return {
+		markers: [...SEARCH_MARKERS],
+		matched: candidates.length,
+		teams: count("team"),
+		uncertain: count("uncertain"),
+	};
+}
+
 function decorate(
 	candidates: readonly TeamCandidate[],
 	org: string,
@@ -475,6 +502,7 @@ export async function discoverTeams(
 
 	const serveCache = (notes: string[]): TeamDiscovery => ({
 		...base,
+		survey: cached ? surveyOf(cached.candidates) : undefined,
 		available: !!cached,
 		teams: cached
 			? decorate(
@@ -524,17 +552,23 @@ export async function discoverTeams(
 	const batches: SearchHit[][] = [];
 	for (const marker of SEARCH_MARKERS) {
 		const result = await run("gh", searchArgs(org, marker), GH_TIMEOUT_MS);
-		if (result.code !== 0) {
+		const reply = result.code === 0 ? parseSearchHits(result.stdout) : undefined;
+		if (!reply?.readable) {
 			// A partial union would cache a list that is missing whole teams, so stop here
-			// and keep whatever complete snapshot already exists.
-			const note = isRateLimited(result)
-				? "GitHub's search rate limit is exhausted. It resets about once a minute — try refreshing again shortly."
-				: `Cosmos could not search ${org} for teams. ${firstLine(result.stderr) || "The GitHub CLI reported an error."}`;
+			// and keep whatever complete snapshot already exists. An unreadable reply counts
+			// as a failure too: `gh` exits 0 while printing something we cannot use, and
+			// treating that as "no results" is how a broken search poses as an empty org.
+			const note =
+				result.code === 0
+					? `Cosmos searched ${org} for \`${marker}\` but could not read the reply from the GitHub CLI. This usually means \`gh\` changed its output format; \`gh --version\` and \`gh api /search/code\` are worth a look.`
+					: isRateLimited(result)
+						? "GitHub's search rate limit is exhausted. It resets about once a minute — try refreshing again shortly."
+						: `Cosmos could not search ${org} for teams. ${firstLine(result.stderr) || "The GitHub CLI reported an error."}`;
 			return cached
 				? serveCache([note])
 				: { ...base, available: false, teams: [], notes: [note, ...joinNote], fromCache: false };
 		}
-		batches.push(parseSearchHits(result.stdout));
+		batches.push(reply.hits);
 	}
 
 	const hits = unionSearchHits(batches);
@@ -558,19 +592,33 @@ export async function discoverTeams(
 		membershipContext,
 	);
 	const notes = [...joinNote];
-	if (decorated.length === 0) {
+	const survey = surveyOf(candidates);
+	if (survey.matched === 0) {
 		notes.push(
-			`No team config repos turned up in ${org}. If your team keeps its layer somewhere else, clone it and run \`glayvin manage teams add <name> <path>\`.`,
+			`No repos in ${org} contain ${listMarkers()} at their root, so there was nothing to check. If your team keeps its layer somewhere else, clone it and run \`glayvin manage teams add <name> <path>\`.`,
+		);
+	} else if (survey.teams === 0) {
+		// Matching repos but confirming none of them is the shape of a stale classifier.
+		// They still appear, under "Might be teams", so this explains why nothing made
+		// it into the confident list rather than leaving the hedge unexplained.
+		notes.push(
+			`Cosmos matched ${survey.matched} ${survey.matched === 1 ? "repo" : "repos"} in ${org} but could not confirm any of them as a team layer, so they are all listed as uncertain below. A team layer normally has \`packs\`, \`profiles\`, \`agents\` or \`skills\` at its root.`,
 		);
 	}
 	return {
 		...base,
+		survey,
 		available: true,
 		teams: decorated,
 		notes,
 		fetchedAt,
 		fromCache: false,
 	};
+}
+
+function listMarkers(): string {
+	const names = SEARCH_MARKERS.map((name) => `\`${name}\``);
+	return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
 
 function firstLine(text: string): string {

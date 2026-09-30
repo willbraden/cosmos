@@ -1828,6 +1828,15 @@ function Teams() {
 							<strong>Last checked:</strong>{" "}
 							<span className="muted">{relativeTime(discovery.fetchedAt)}</span>
 						</div>
+						{discovery.survey && (
+							<div>
+								<strong>Searched for:</strong>{" "}
+								<span className="muted">
+									{discovery.survey.markers.join(", ")} — matched{" "}
+									{discovery.survey.matched}, confirmed {discovery.survey.teams}
+								</span>
+							</div>
+						)}
 					</div>
 
 					{discovery.notes.map((note) => (
@@ -1881,12 +1890,6 @@ function Teams() {
 						</>
 					)}
 
-					{discovery.available && available.length === 0 && joined.length === 0 && (
-						<div className="muted" style={{ marginTop: 14 }}>
-							No team layers matched in {discovery.org}.
-						</div>
-					)}
-
 					{uncertain.length > 0 && (
 						<details className="mcp-tools" style={{ marginTop: 18 }}>
 							<summary>Not sure about these ({uncertain.length})</summary>
@@ -1901,6 +1904,21 @@ function Teams() {
 								))}
 							</div>
 						</details>
+					)}
+
+					{discovery.available && available.length === 0 && uncertain.length === 0 && (
+						<div className="notice info" style={{ marginTop: 18 }}>
+							<div>
+								{joined.length > 0
+									? `Nothing further to join in ${discovery.org}.`
+									: `Nothing to join in ${discovery.org} yet.`}{" "}
+								{discovery.survey
+									? `Cosmos looked for ${discovery.survey.markers.join(", ")} at the root of every repo you can read, and matched ${discovery.survey.matched}.`
+									: "Refresh to search again."}{" "}
+								A team layer kept outside {discovery.org} still works — clone it and
+								run `glayvin manage teams add &lt;name&gt; &lt;path&gt;`.
+							</div>
+						</div>
 					)}
 
 					{template && (

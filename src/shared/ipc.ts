@@ -258,6 +258,26 @@ export interface TeamDiscovery {
 	fromCache: boolean;
 	/** False when the glayvin CLI is missing, so joining cannot be offered. */
 	canJoin: boolean;
+	/**
+	 * What the last search actually did. Lets an empty pane say what it looked for
+	 * instead of implying the org has nothing. Absent on caches written before this existed.
+	 */
+	survey?: TeamSurvey;
+}
+
+export interface TeamSurvey {
+	/** The filenames searched for, so an empty result is reproducible by hand. */
+	markers: string[];
+	/** Repos the union of those searches matched. */
+	matched: number;
+	/** Confirmed team layers, offered for joining outright. */
+	teams: number;
+	/**
+	 * Matched but not confirmed — an unreadable root, or too few layer markers. Still
+	 * listed and joinable, just hedged. All of them being uncertain means the
+	 * classifier confirmed nothing, which is worth saying out loud.
+	 */
+	uncertain: number;
 }
 
 export interface OpenSessionRequest {
