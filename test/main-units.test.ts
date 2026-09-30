@@ -645,6 +645,39 @@ describe("glayvin profile overview", () => {
 			]);
 	});
 
+	it("treats only pack-pulled reasons as implicit, not hand-enabled ones", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(
+			glayvinHome,
+			async (_home, args) =>
+				args[0] === "packs"
+					? {
+							packs: [
+								// Neither is named by the profile, so a diff against the
+								// profile's packs[] would call both implicit.
+								{
+									id: "vision",
+									source: "built-in",
+									status: "effective",
+									via: "enabledPacks",
+								},
+								{
+									id: "graphify",
+									source: "built-in",
+									status: "effective",
+									via: "requires:builder",
+								},
+							],
+						}
+					: { profiles: [] },
+		);
+
+		expect(overview.packs.map((pack) => [pack.id, pack.implicit])).toEqual([
+			["vision", false],
+			["graphify", true],
+		]);
+	});
+
 	it("falls back to resolved.json when the resolver cannot run", async () => {
 		const { glayvinHome } = setupDefaultProfile();
 		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);

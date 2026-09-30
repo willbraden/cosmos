@@ -195,6 +195,16 @@ function readTeamContributions(teamPath: string): GlayvinTeamContributions {
  * Probes the directories the resolver's `discoverLayers` searches, to find which layer a
  * manifest came from. Highest precedence first.
  *
+ * Two path layouts are easy to get wrong, so state them plainly (source of truth is
+ * `lib/resolver/src/layers.mjs`):
+ *   - the home-local layer is `$GLAYVIN_HOME/.local/glayvin/{packs,profiles}`, with the
+ *     extra `glayvin` segment — not `$GLAYVIN_HOME/.local/{packs,profiles}`
+ *   - a registered team root holds `{packs,profiles}` directly, not under a nested
+ *     `.glayvin/`. `$cwd/.glayvin` is a separate team root in its own right, which is
+ *     where the mistaken layout comes from.
+ *
+ * Later-registered teams win, hence the reversed iteration.
+ *
  * Repo-scoped layers (`$cwd/.glayvin` and `$cwd/.local/glayvin`) are deliberately not
  * probed: which repo applies depends on where Glayvin was invoked, which Cosmos cannot
  * know from the seed alone.
@@ -311,6 +321,16 @@ function declaredPackIds(
 	return manifest ? toStringArray(manifest.packs) : undefined;
 }
 
+/**
+ * True when a pack is in play because another pack pulled it in, rather than because the
+ * profile or the user asked for it. `includes` is a pack listing another in its
+ * `includes[]`; `requires:<id>` is a hard dependency. `enabledPacks` is deliberately not
+ * transitive — that is a user turning a pack on by hand, outside the profile.
+ */
+function isTransitiveVia(via: string): boolean {
+	return via === "includes" || via.startsWith("requires:");
+}
+
 function packsFromResolver(
 	cliPacks: Record<string, unknown>[],
 	resolved: Record<string, unknown>,
@@ -323,9 +343,13 @@ function packsFromResolver(
 		if (!id) return [];
 		const layer = toLayer(entry.source);
 		const status = toStatus(entry.status);
+		const via = optionalString(entry.via);
 		const teamName =
 			layer === "team"
-				? locateManifest("packs", id, glayvinHome, teams).teamName
+				? // The resolver reports the layer but not which team within it, so this
+					// is the one attribution Cosmos still infers. Untestable against real
+					// data today: no registered team ships packs.
+					locateManifest("packs", id, glayvinHome, teams).teamName
 				: undefined;
 		return [
 			{
@@ -334,9 +358,14 @@ function packsFromResolver(
 				teamName,
 				description: optionalString(entry.description),
 				status,
-				via: optionalString(entry.via),
+				via,
+				// The resolver reports why a pack is in play; only diff against the
+				// profile when it does not, which is the file-fallback shape.
 				implicit:
-					status === "effective" && !!declared && !declared.includes(id),
+					status === "effective" &&
+					(via
+						? isTransitiveVia(via)
+						: !!declared && !declared.includes(id)),
 				...packCounts(resolved, id),
 			},
 		];
