@@ -47,9 +47,10 @@ function nodeExecutable(): string {
 /**
  * Runs one of Glayvin's resolver CLI subcommands and returns its parsed JSON.
  *
- * Invokes `lib/resolver/bin/cli.mjs` directly rather than the `bin/glayvin` bash wrapper,
- * because the wrapper installs the resolver's npm dependencies on demand and a settings
- * pane must never block on that. Returns undefined on any failure — a missing resolver,
+ * Invokes `lib/resolver/bin/cli.mjs` directly rather than the `bin/glayvin` bash wrapper.
+ * The wrapper installs the resolver's npm dependencies on demand on its setup, launch and
+ * update paths; no read path does so today, but a settings pane should not depend on that
+ * staying true. Returns undefined on any failure — a missing resolver,
  * missing dependencies, a timeout, or unparseable output all fall back to reading files.
  */
 export const runResolverCli: ResolverRunner = async (glayvinHome, args) => {
