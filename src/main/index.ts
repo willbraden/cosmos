@@ -64,6 +64,7 @@ import {
 import {
 	detectGlayvinHome,
 	inferGlayvinHomeFromAgentDir,
+	readGlayvinTeams,
 	resolveGlayvinHomePath,
 	type RuntimePaths,
 } from "./glayvin-runtime";
@@ -137,6 +138,7 @@ function currentWorkspaceHealth(): WorkspaceHealth {
 	return inspectWorkspace(
 		resolveWorkspaceRootPath(current),
 		current.coreRepoOrg,
+		readGlayvinTeams(resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME)),
 	);
 }
 

@@ -2800,6 +2800,16 @@ select {
 	gap: 4px;
 }
 
+.repo-card-kind-team {
+	border-color: color-mix(
+		in srgb,
+		var(--color-border-neutral-strong) 55%,
+		transparent
+	);
+	font-variant-caps: all-small-caps;
+	letter-spacing: 0.04em;
+}
+
 .repo-card-progress {
 	font-size: 11px;
 	font-variant-numeric: tabular-nums;

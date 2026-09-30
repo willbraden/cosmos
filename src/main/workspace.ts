@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { WorkspaceHealth, WorkspaceRepoHealth } from "../shared/ipc";
+import type { GlayvinTeam } from "./glayvin-runtime";
 
 /** GitHub org the curated company repos live in. Overridable from Settings. */
 export const DEFAULT_CORE_REPO_ORG = "shipt";
@@ -48,13 +49,14 @@ export function coreRepoCloneUrl(name: string, org?: string): string {
 export function inspectWorkspace(
 	rootPath: string,
 	org?: string,
+	teams: readonly GlayvinTeam[] = [],
 ): WorkspaceHealth {
 	const rootExists = existsSync(rootPath);
 	const rootIsDirectory = rootExists ? safeIsDirectory(rootPath) : false;
 	const repos = CORE_REPOS.map((name) =>
-		inspectRepo(rootPath, name, coreRepoCloneUrl(name, org)),
+		inspectRepo(rootPath, name, coreRepoCloneUrl(name, org), teams),
 	);
-	const experiments = rootIsDirectory ? inspectExperiments(rootPath) : [];
+	const experiments = rootIsDirectory ? inspectExperiments(rootPath, teams) : [];
 	return {
 		rootPath,
 		rootExists,
@@ -69,12 +71,14 @@ function inspectRepo(
 	rootPath: string,
 	name: string,
 	cloneUrl?: string,
+	teams: readonly GlayvinTeam[] = [],
 ): WorkspaceRepoHealth {
 	const path = join(rootPath, name);
 	const linkTarget = readSymlink(path);
 	const exists = existsSync(path);
 	const isDirectory = exists ? safeIsDirectory(path) : false;
 	const isGitRepo = isDirectory && existsSync(join(path, ".git"));
+	const team = findTeamName(teams, path, linkTarget);
 	return {
 		name,
 		path,
@@ -84,10 +88,29 @@ function inspectRepo(
 		isSymlink: linkTarget !== undefined,
 		...(linkTarget ? { linkTarget } : {}),
 		...(cloneUrl ? { cloneUrl } : {}),
+		...(team ? { team } : {}),
 	};
 }
 
-function inspectExperiments(rootPath: string): WorkspaceRepoHealth[] {
+/**
+ * A team registered against a linked checkout points at the target rather than the
+ * symlink sitting in the workspace, so both are worth comparing.
+ */
+function findTeamName(
+	teams: readonly GlayvinTeam[],
+	path: string,
+	linkTarget: string | undefined,
+): string | undefined {
+	if (teams.length === 0) return undefined;
+	const candidates = new Set([resolve(path)]);
+	if (linkTarget) candidates.add(resolve(linkTarget));
+	return teams.find((team) => candidates.has(resolve(team.path)))?.name;
+}
+
+function inspectExperiments(
+	rootPath: string,
+	teams: readonly GlayvinTeam[] = [],
+): WorkspaceRepoHealth[] {
 	try {
 		return readdirSync(rootPath, { withFileTypes: true })
 			.filter(
@@ -97,7 +120,7 @@ function inspectExperiments(rootPath: string): WorkspaceRepoHealth[] {
 					!entry.name.startsWith(".") &&
 					!CORE_REPO_SET.has(entry.name),
 			)
-			.map((entry) => inspectRepo(rootPath, entry.name))
+			.map((entry) => inspectRepo(rootPath, entry.name, undefined, teams))
 			.filter((repo) => repo.isDirectory || repo.isSymlink)
 			.sort((a, b) => a.name.localeCompare(b.name));
 	} catch {

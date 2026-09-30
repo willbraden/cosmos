@@ -21,6 +21,7 @@ import { ensureCosmosManagedAgentDir } from "../src/main/agent-home";
 import { fuzzyScore } from "../src/main/files";
 import {
 	inferGlayvinHomeFromAgentDir,
+	readGlayvinTeams,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
 import {
@@ -248,6 +249,45 @@ describe("glayvin runtime detection", () => {
 				"/fallback/.glayvin",
 			),
 		).toBe("/override/.glayvin");
+	});
+});
+
+describe("glayvin teams", () => {
+	function homeWith(config: string): string {
+		const home = mkdtempSync(join(tmpdir(), "cosmos-teams-"));
+		mkdirSync(join(home, ".local"), { recursive: true });
+		writeFileSync(join(home, ".local", "glayvin.json"), config);
+		return home;
+	}
+
+	it("reads registered teams, skipping entries it cannot resolve", () => {
+		const home = homeWith(
+			JSON.stringify({
+				teams: [
+					{ name: "cosmos-ai", path: "/Users/test/Cosmos/cosmos-ai" },
+					// Relative paths are repo-relative, so there is nothing to match against.
+					{ name: "relative", path: "./shared-config" },
+					{ name: "  padded  ", path: "/Users/test/padded" },
+					{ name: "", path: "/Users/test/nameless" },
+					{ path: "/Users/test/anonymous" },
+					"not-an-object",
+				],
+			}),
+		);
+		expect(readGlayvinTeams(home)).toEqual([
+			{ name: "cosmos-ai", path: "/Users/test/Cosmos/cosmos-ai" },
+			{ name: "padded", path: "/Users/test/padded" },
+		]);
+	});
+
+	it("degrades to no teams rather than throwing", () => {
+		expect(readGlayvinTeams(undefined)).toEqual([]);
+		expect(readGlayvinTeams("/nope/does-not-exist")).toEqual([]);
+		expect(readGlayvinTeams(homeWith("{ not json"))).toEqual([]);
+		expect(readGlayvinTeams(homeWith(JSON.stringify({})))).toEqual([]);
+		expect(readGlayvinTeams(homeWith(JSON.stringify({ teams: "nope" })))).toEqual(
+			[],
+		);
 	});
 });
 
@@ -559,6 +599,49 @@ describe("workspace repos", () => {
 		expect(neutron?.linkTarget).toBe(external);
 		expect(neutron?.isGitRepo).toBe(true);
 		expect(health.readyRepos).toBe(1);
+	});
+
+	it("tags repos registered as a glayvin team layer", () => {
+		const root = workspace();
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "design-ops", path: join(root, "cosmos-ai") },
+		]);
+
+		expect(
+			health.repos.find((repo) => repo.name === "cosmos-ai")?.team,
+		).toBe("design-ops");
+		// A repo nobody registered carries no team, so the UI keeps its own label.
+		expect(
+			health.repos.find((repo) => repo.name === "neutron"),
+		).not.toHaveProperty("team");
+	});
+
+	it("matches a team registered against a linked checkout's target", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		mkdirSync(join(external, ".git"), { recursive: true });
+		linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: external });
+
+		// Trailing slashes are how a path lands when copied out of a shell.
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "platform", path: `${external}/` },
+		]);
+
+		expect(health.repos.find((repo) => repo.name === "neutron")?.team).toBe(
+			"platform",
+		);
+	});
+
+	it("tags experiments too, since a team can point anywhere", () => {
+		const root = workspace();
+		mkdirSync(join(root, "showcase"), { recursive: true });
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "showcase-team", path: join(root, "showcase") },
+		]);
+
+		expect(
+			health.experiments.find((repo) => repo.name === "showcase")?.team,
+		).toBe("showcase-team");
 	});
 
 	it("refuses to link over an existing entry or from inside the workspace", () => {
