@@ -1193,59 +1193,57 @@ select {
 }
 
 .custom-spinner-icon .outer,
-.custom-spinner-icon .middle,
 .custom-spinner-icon .inner {
 	stroke: currentColor;
 }
 
-.custom-spinner-icon .inner {
-	fill: currentColor;
-}
-
 .custom-spinner-icon .outer {
+	fill: none;
 	animation: active-spinner-outer 1.5s linear infinite;
 }
 
-.custom-spinner-icon .middle {
-	animation: active-spinner-middle 1.5s linear infinite;
-}
-
 .custom-spinner-icon .inner {
+	fill: currentColor;
 	animation: active-spinner-inner 1.5s linear infinite;
 }
 
 @keyframes active-spinner-outer {
-	0%,
-	48%,
-	88%,
+	0% {
+		animation-timing-function: linear;
+		stroke-width: 2px;
+	}
+	14.67% {
+		animation-timing-function: ease-in-out;
+		stroke-width: 2px;
+	}
+	32.01% {
+		animation-timing-function: ease-in-out;
+		stroke-width: 4px;
+	}
+	49.36% {
+		animation-timing-function: linear;
+		stroke-width: 2px;
+	}
 	100% {
-		stroke-width: 1px;
-	}
-	68% {
-		stroke-width: 2.2px;
-	}
-}
-
-@keyframes active-spinner-middle {
-	0%,
-	21.33%,
-	61.33%,
-	100% {
-		stroke-width: 1px;
-	}
-	41.33% {
-		stroke-width: 2.2px;
+		stroke-width: 2px;
 	}
 }
 
 @keyframes active-spinner-inner {
-	0%,
-	33.33%,
-	100% {
-		stroke-width: 1px;
+	0% {
+		animation-timing-function: ease-in-out;
+		stroke-width: 2px;
 	}
 	14.67% {
-		stroke-width: 2.2px;
+		animation-timing-function: ease-in-out;
+		stroke-width: 4px;
+	}
+	33.33% {
+		animation-timing-function: linear;
+		stroke-width: 2px;
+	}
+	100% {
+		stroke-width: 2px;
 	}
 }
 
