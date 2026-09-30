@@ -312,7 +312,6 @@ Subparts present in code:
 
 - `.sidebar-top`
 - `.sidebar-top-row`
-- `.new-session-btn`
 - `.search`
 - `.sidebar-list`
 - `.sidebar-section`
@@ -320,21 +319,7 @@ Subparts present in code:
 - `.sidebar-footer`
 - `.sidebar-empty`
 
-### 6. New session button (`.new-session-btn`)
-
-Source: `src/renderer/src/styles/app.css`, `src/renderer/src/components/Sidebar.tsx`
-
-Real properties:
-
-- height `34px`
-- horizontal padding `10px`
-- radius `9px`
-- border `1px solid var(--color-border-neutral-normal)`
-- background `var(--color-surface-primary)`
-- font size `13px`
-- shadow `var(--shadow-rest)`
-
-### 7. Search field (`.search`)
+### 6. Search field (`.search`)
 
 Source: `src/renderer/src/styles/app.css`, `src/renderer/src/components/Sidebar.tsx`
 
@@ -347,7 +332,7 @@ Real properties:
 - focus-within adds neutral border and normal background
 - contains an `input` with transparent background and no border
 
-### 8. Session row (`.session-row`)
+### 7. Session row (`.session-row`)
 
 Source:
 
@@ -377,7 +362,7 @@ Related adornments:
 - `.session-dropzone`
 - `.session-dropzone.active`
 
-### 9. Main header (`.main-header`)
+### 8. Main header (`.main-header`)
 
 Source:
 
@@ -401,7 +386,7 @@ Subparts present in code:
 - context meter from `ContextMeter`
 - action icon buttons
 
-### 10. Context meter
+### 9. Context meter
 
 Source: `src/renderer/src/components/ChatView.tsx`
 
@@ -414,7 +399,7 @@ Real behavior:
 
 Unresolved note: `ContextMeter` references CSS vars `--danger`, `--warning`, `--accent`, and `--border-strong` in inline styles. Those token names were not found in `src/renderer/src/styles/tokens.css` during this review. Do not normalize them in Figma without a code decision.
 
-### 11. Transcript shell
+### 10. Transcript shell
 
 Source:
 
@@ -430,7 +415,7 @@ Real layout primitives:
 - tool calls render through `ToolCard`
 - markdown text renders through `Markdown`
 
-### 12. Markdown / code block
+### 11. Markdown / code block
 
 Source:
 
@@ -444,7 +429,7 @@ Real parts:
 - syntax color vars `--hl-keyword`, `--hl-string`, `--hl-number`, `--hl-comment`, `--hl-title`, `--hl-attr`
 - `CopyButton` uses `.icon-btn`
 
-### 13. Reasoning fold / tool fold (`.fold`)
+### 12. Reasoning fold / tool fold (`.fold`)
 
 Source:
 
@@ -463,7 +448,7 @@ Real parts:
 - `.thinking-body`
 - `.tool-body`
 
-### 14. Diff view
+### 13. Diff view
 
 Source:
 
@@ -479,7 +464,7 @@ Real parts visible in CSS:
 - `.diff-line.hunk`
 - `.diff-line .text`
 
-### 15. Composer
+### 14. Composer
 
 Source:
 
@@ -515,7 +500,7 @@ Behavior verified in React code:
 - send behavior changes while busy
 - stop action is exposed on `Escape` while busy
 
-### 16. Popover / menu patterns
+### 15. Popover / menu patterns
 
 Source:
 
@@ -532,7 +517,7 @@ Real patterns present in code:
 - `.filter`
 - segmented control `.segmented`
 
-### 17. Switch
+### 16. Switch
 
 Source: `src/renderer/src/components/SettingsModal.tsx`, `src/renderer/src/styles/app.css`
 
@@ -548,7 +533,7 @@ Real visual states:
 - `.switch.on`
 - `.switch.on::after`
 
-### 18. Settings row (`Setting`)
+### 17. Settings row (`Setting`)
 
 Source: `src/renderer/src/components/SettingsModal.tsx`, `src/renderer/src/styles/app.css`
 
@@ -566,7 +551,7 @@ Real style parts:
 - `.setting-text .help`
 - `.setting-control`
 
-### 19. Dialog card
+### 18. Dialog card
 
 Source:
 
@@ -589,7 +574,7 @@ Real parts in React:
 - `.dialog-card-body`
 - `.dialog-card-actions`
 
-### 20. Changes panel
+### 19. Changes panel
 
 Source:
 
@@ -610,7 +595,7 @@ Real parts:
 - `.change-file`
 - `.change-file-header`
 
-### 21. Empty-state patterns
+### 20. Empty-state patterns
 
 Source:
 
@@ -627,7 +612,7 @@ Real elements seen in code/CSS:
 - `.welcome-card`
 - Home cards like `.home-suggestion`, `.repo-card`
 
-### 22. Toast
+### 21. Toast
 
 Source: `src/renderer/src/components/Toasts.tsx`, `src/renderer/src/styles/app.css`
 
@@ -638,7 +623,7 @@ Real parts:
 - `.toast.error` and other level classes if present in CSS
 - text plus optional action plus dismiss button
 
-### 23. Cosmos mark
+### 22. Cosmos mark
 
 Source: `src/renderer/src/components/CosmosMark.tsx`
 
@@ -723,7 +708,7 @@ Do not add a generic card, badge, tag, tab bar, or navigation rail unless you fi
 
 Use existing interface concepts only:
 
-- left sidebar with new session button, search field, grouped session rows, footer actions
+- left sidebar with search field, grouped session rows, footer actions
 - header with editable title, project chip, context meter, fork button, changes button
 - transcript with at least:
   - one user bubble

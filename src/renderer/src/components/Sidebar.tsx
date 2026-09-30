@@ -16,7 +16,6 @@ import {
 	Plus,
 	Search,
 	Settings,
-	SquarePen,
 } from "lucide-react";
 import {
 	memo,
@@ -42,12 +41,7 @@ import {
 	tabForSession,
 	togglePin,
 } from "../state/actions";
-import {
-	activeTab,
-	sessionTitle,
-	type TabState,
-	useStore,
-} from "../state/store";
+import { sessionTitle, type TabState, useStore } from "../state/store";
 
 const GROUP_PREVIEW = 6;
 
@@ -669,13 +663,6 @@ export function Sidebar(_props?: { collapsed?: boolean }) {
 					onClick={() => showHome()}
 				>
 					<House size={15} /> Home
-				</button>
-				<button
-					type="button"
-					className="new-session-btn"
-					onClick={() => void startNewSession(activeTab()?.cwd)}
-				>
-					<SquarePen size={15} /> New session <span className="kbd">⌘N</span>
 				</button>
 				<label className="search">
 					<Search size={14} />

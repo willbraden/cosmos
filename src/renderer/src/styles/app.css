@@ -374,28 +374,6 @@ select {
 	color: var(--color-foreground-neutral-default-strong);
 }
 
-.new-session-btn {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	height: 34px;
-	padding: 0 10px;
-	border-radius: 9px;
-	border: 1px solid var(--color-border-neutral-normal);
-	background: var(--color-surface-primary);
-	font-weight: 500;
-	font-size: 13px;
-	box-shadow: var(--shadow-rest);
-}
-
-.new-session-btn:hover {
-	background: var(--color-background-neutral-default-subtle-hover);
-}
-
-.new-session-btn .kbd {
-	margin-left: auto;
-}
-
 .search {
 	display: flex;
 	align-items: center;
