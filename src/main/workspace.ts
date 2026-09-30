@@ -3,6 +3,7 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	readFileSync,
 	readdirSync,
 	readlinkSync,
 	renameSync,
@@ -18,23 +19,40 @@ import type { GlayvinTeam } from "./glayvin-runtime";
 /** GitHub org the curated company repos live in. Overridable from Settings. */
 export const DEFAULT_CORE_REPO_ORG = "shipt";
 
-const CORE_REPOS = [
-	"cosmos-ai",
-	"segway-next",
-	"neutron",
-	"design-system",
-] as const;
-const CORE_REPO_SET = new Set<string>(CORE_REPOS);
+/** A repo Cosmos offers on the home screen, with an optional org of its own. */
+export interface CoreRepoSpec {
+	name: string;
+	org?: string;
+}
+
+/** Shown to anyone whose teams do not publish a list of their own. */
+export const DEFAULT_CORE_REPOS: readonly CoreRepoSpec[] = [
+	{ name: "cosmos-ai" },
+	{ name: "segway-next" },
+	{ name: "neutron" },
+	{ name: "design-system" },
+];
+
+/** Filename a Glayvin team layer uses to curate the repos its members see. */
+export const TEAM_REPOS_FILE = "cosmos-repos.json";
 
 /** Cloning a large monorepo can take minutes, so give git plenty of room. */
 const CLONE_TIMEOUT_MS = 20 * 60 * 1000;
 
-export function isCoreRepoName(name: string): boolean {
-	return CORE_REPO_SET.has(name);
+export function findCoreRepo(
+	name: string,
+	coreRepos: readonly CoreRepoSpec[] = DEFAULT_CORE_REPOS,
+): CoreRepoSpec | undefined {
+	return coreRepos.find((repo) => repo.name === name);
 }
 
 export function isValidOrgName(org: string): boolean {
 	return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(org);
+}
+
+/** A repo name becomes both a workspace folder and a path inside a clone URL. */
+export function isValidRepoName(name: string): boolean {
+	return /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/.test(name);
 }
 
 export function normalizeOrg(org: string | undefined): string {
@@ -46,17 +64,88 @@ export function coreRepoCloneUrl(name: string, org?: string): string {
 	return `git@github.com:${normalizeOrg(org)}/${name}.git`;
 }
 
+/**
+ * Repos a team publishes for its members, read from `cosmos-repos.json` at the
+ * root of its layer. Glayvin does not define this file, so Cosmos owns the shape:
+ * a `repos` array of names or `{ name, org }` objects, plus an optional team-wide
+ * `org`. Unreadable files and invalid names are skipped rather than surfaced,
+ * since a typo in shared config should not empty someone's home screen.
+ */
+export function readTeamRepos(
+	teams: readonly GlayvinTeam[],
+): readonly CoreRepoSpec[] {
+	const seen = new Set<string>();
+	const repos: CoreRepoSpec[] = [];
+	for (const team of teams) {
+		for (const spec of parseTeamRepos(join(team.path, TEAM_REPOS_FILE))) {
+			if (seen.has(spec.name)) continue;
+			seen.add(spec.name);
+			repos.push(spec);
+		}
+	}
+	return repos;
+}
+
+function parseTeamRepos(filePath: string): CoreRepoSpec[] {
+	try {
+		const parsed = JSON.parse(readFileSync(filePath, "utf8")) as {
+			org?: unknown;
+			repos?: unknown;
+		};
+		if (!Array.isArray(parsed?.repos)) return [];
+		const teamOrg = cleanOrg(parsed.org);
+		return parsed.repos.flatMap((entry) => {
+			const isShorthand = typeof entry === "string";
+			const raw = isShorthand ? entry : (entry as CoreRepoSpec)?.name;
+			const name = typeof raw === "string" ? raw.trim() : "";
+			if (!isValidRepoName(name)) return [];
+			const org = isShorthand
+				? teamOrg
+				: (cleanOrg((entry as CoreRepoSpec)?.org) ?? teamOrg);
+			return [{ name, ...(org ? { org } : {}) }];
+		});
+	} catch {
+		return [];
+	}
+}
+
+function cleanOrg(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return isValidOrgName(trimmed) ? trimmed : undefined;
+}
+
+/**
+ * A team's list replaces the built-in repos outright, so members see their own
+ * work rather than everyone's. An empty or absent list falls back instead of
+ * showing nothing, because a home screen with no repos offers no way out.
+ */
+export function resolveCoreRepos(
+	teams: readonly GlayvinTeam[],
+): readonly CoreRepoSpec[] {
+	const declared = readTeamRepos(teams);
+	return declared.length > 0 ? declared : DEFAULT_CORE_REPOS;
+}
+
 export function inspectWorkspace(
 	rootPath: string,
 	org?: string,
 	teams: readonly GlayvinTeam[] = [],
+	coreRepos: readonly CoreRepoSpec[] = DEFAULT_CORE_REPOS,
 ): WorkspaceHealth {
 	const rootExists = existsSync(rootPath);
 	const rootIsDirectory = rootExists ? safeIsDirectory(rootPath) : false;
-	const repos = CORE_REPOS.map((name) =>
-		inspectRepo(rootPath, name, coreRepoCloneUrl(name, org), teams),
+	const repos = coreRepos.map((repo) =>
+		inspectRepo(
+			rootPath,
+			repo.name,
+			coreRepoCloneUrl(repo.name, repo.org ?? org),
+			teams,
+		),
 	);
-	const experiments = rootIsDirectory ? inspectExperiments(rootPath, teams) : [];
+	const experiments = rootIsDirectory
+		? inspectExperiments(rootPath, teams, coreRepos)
+		: [];
 	return {
 		rootPath,
 		rootExists,
@@ -110,7 +199,9 @@ function findTeamName(
 function inspectExperiments(
 	rootPath: string,
 	teams: readonly GlayvinTeam[] = [],
+	coreRepos: readonly CoreRepoSpec[] = DEFAULT_CORE_REPOS,
 ): WorkspaceRepoHealth[] {
+	const coreNames = new Set(coreRepos.map((repo) => repo.name));
 	try {
 		return readdirSync(rootPath, { withFileTypes: true })
 			.filter(
@@ -118,7 +209,7 @@ function inspectExperiments(
 					// readdir does not follow links, so linked checkouts report as symlinks.
 					(entry.isDirectory() || entry.isSymbolicLink()) &&
 					!entry.name.startsWith(".") &&
-					!CORE_REPO_SET.has(entry.name),
+					!coreNames.has(entry.name),
 			)
 			.map((entry) => inspectRepo(rootPath, entry.name, undefined, teams))
 			.filter((repo) => repo.isDirectory || repo.isSymlink)

@@ -56,7 +56,10 @@ import {
 	cloneWorkspaceRepo,
 	coreRepoCloneUrl,
 	inspectWorkspace,
-	isCoreRepoName,
+	findCoreRepo,
+	resolveCoreRepos,
+	DEFAULT_CORE_REPOS,
+	TEAM_REPOS_FILE,
 	linkWorkspaceRepo,
 	cloneFailureMessage,
 	lastMeaningfulLine,
@@ -644,6 +647,7 @@ describe("workspace repos", () => {
 		).toBe("showcase-team");
 	});
 
+
 	it("refuses to link over an existing entry or from inside the workspace", () => {
 		const root = workspace();
 		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
@@ -858,15 +862,111 @@ describe("clone failure context", () => {
 	});
 });
 
+describe("team-curated repo lists", () => {
+	function team(name: string, contents?: unknown) {
+		const path = mkdtempSync(join(tmpdir(), `cosmos-team-${name}-`));
+		if (contents !== undefined) {
+			writeFileSync(join(path, TEAM_REPOS_FILE), JSON.stringify(contents));
+		}
+		return { name, path };
+	}
+
+	it("replaces the built-in repos when a team publishes its own", () => {
+		const repos = resolveCoreRepos([
+			team("design-ops", { repos: ["cosmos-ai", "design-system"] }),
+		]);
+
+		expect(repos.map((repo) => repo.name)).toEqual([
+			"cosmos-ai",
+			"design-system",
+		]);
+	});
+
+	// Nobody has authored one of these files yet, so the untouched path is the
+	// one almost everybody takes.
+	it("falls back to the built-in repos when no team declares any", () => {
+		expect(resolveCoreRepos([])).toEqual(DEFAULT_CORE_REPOS);
+		expect(resolveCoreRepos([team("no-file")])).toEqual(DEFAULT_CORE_REPOS);
+		expect(resolveCoreRepos([team("empty", { repos: [] })])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+		expect(resolveCoreRepos([team("wrong-shape", { repos: "neutron" })])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+	});
+
+	it("survives a malformed file rather than emptying the home screen", () => {
+		const broken = mkdtempSync(join(tmpdir(), "cosmos-team-broken-"));
+		writeFileSync(join(broken, TEAM_REPOS_FILE), "{ not json");
+
+		expect(resolveCoreRepos([{ name: "broken", path: broken }])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+	});
+
+	it("unions across teams and keeps the first spelling of a repeat", () => {
+		const repos = resolveCoreRepos([
+			team("first", { org: "shipt", repos: ["neutron"] }),
+			team("second", { repos: [{ name: "neutron", org: "other" }, "segway-next"] }),
+		]);
+
+		expect(repos).toEqual([
+			{ name: "neutron", org: "shipt" },
+			{ name: "segway-next" },
+		]);
+	});
+
+	it("applies a per-repo org over the team org", () => {
+		const repos = resolveCoreRepos([
+			team("mixed", {
+				org: "shipt",
+				repos: ["neutron", { name: "widget", org: "acme-co" }],
+			}),
+		]);
+
+		expect(coreRepoCloneUrl("neutron", repos[0]?.org)).toBe(
+			"git@github.com:shipt/neutron.git",
+		);
+		expect(coreRepoCloneUrl("widget", repos[1]?.org)).toBe(
+			"git@github.com:acme-co/widget.git",
+		);
+	});
+
+	// These names reach both mkdir and a clone URL, so a bad one is worse than a
+	// missing one.
+	it("drops names that would escape the workspace or the URL path", () => {
+		const repos = resolveCoreRepos([
+			team("sloppy", {
+				repos: ["../evil", "a/b", ".git", "", "  ", 7, { name: "good-repo" }],
+			}),
+		]);
+
+		expect(repos).toEqual([{ name: "good-repo" }]);
+	});
+
+	it("re-sorts siblings into experiments when the core list changes", () => {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-workspace-"));
+		mkdirSync(join(root, "neutron"), { recursive: true });
+		const declared = resolveCoreRepos([
+			team("design-ops", { repos: ["design-system"] }),
+		]);
+		const health = inspectWorkspace(root, undefined, [], declared);
+
+		// neutron is built-in but unlisted here, so it demotes to an experiment.
+		expect(health.repos.map((repo) => repo.name)).toEqual(["design-system"]);
+		expect(health.experiments.map((repo) => repo.name)).toEqual(["neutron"]);
+	});
+});
+
 describe("core repo list", () => {
 	// shipt/nebula never existed. It sat in this list unnoticed because the list
 	// started life as folder names to look for, and only later became the source
 	// of clone URLs, where a name that is merely wrong turns into a 404.
 	it("lists repos that exist, not folder labels", () => {
 		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
-			expect(isCoreRepoName(name)).toBe(true);
+			expect(findCoreRepo(name)).toBeDefined();
 		}
-		expect(isCoreRepoName("nebula")).toBe(false);
+		expect(findCoreRepo("nebula")).toBeUndefined();
 	});
 
 	it("builds a clone URL for every core repo", () => {
