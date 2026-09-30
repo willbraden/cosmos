@@ -64,6 +64,7 @@ import {
 import {
 	detectGlayvinHome,
 	inferGlayvinHomeFromAgentDir,
+	readGlayvinTeams,
 	resolveGlayvinHomePath,
 	type RuntimePaths,
 } from "./glayvin-runtime";
@@ -77,10 +78,11 @@ import {
 	assertWorkspaceEntryName,
 	cloneWorkspaceRepo,
 	coreRepoCloneUrl,
+	findCoreRepo,
 	inspectWorkspace,
-	isCoreRepoName,
 	isPathInsideWorkspace,
 	linkWorkspaceRepo,
+	resolveCoreRepos,
 	unlinkWorkspaceRepo,
 	workspaceEntryPath,
 } from "./workspace";
@@ -134,9 +136,21 @@ function resolveWorkspaceRootPath(settingsValue: DesktopSettings): string {
 
 function currentWorkspaceHealth(): WorkspaceHealth {
 	const current = settings.get();
+	const teams = readGlayvinTeams(
+		resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME),
+	);
 	return inspectWorkspace(
 		resolveWorkspaceRootPath(current),
 		current.coreRepoOrg,
+		teams,
+		resolveCoreRepos(teams),
+	);
+}
+
+/** Read fresh each time, so registering a team takes effect without a restart. */
+function currentCoreRepos(current: DesktopSettings) {
+	return resolveCoreRepos(
+		readGlayvinTeams(resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME)),
 	);
 }
 
@@ -598,13 +612,14 @@ function registerIpc(): void {
 	ipcMain.handle("workspace:health", () => currentWorkspaceHealth());
 	ipcMain.handle("workspace:clone-repo", async (_e, name: unknown) => {
 		const repoName = assertWorkspaceEntryName(String(name ?? ""));
-		if (!isCoreRepoName(repoName)) {
-			throw new Error(`${repoName} is not one of the core company repos.`);
+		const current = settings.get();
+		const repo = findCoreRepo(repoName, currentCoreRepos(current));
+		if (!repo) {
+			throw new Error(`${repoName} is not one of the suggested repos.`);
 		}
 		if (cloningRepos.has(repoName)) {
 			throw new Error(`${repoName} is already being cloned.`);
 		}
-		const current = settings.get();
 		const rootPath = resolveWorkspaceRootPath(current);
 		cloningRepos.add(repoName);
 		try {
@@ -612,7 +627,7 @@ function registerIpc(): void {
 			await cloneWorkspaceRepo({
 				rootPath,
 				name: repoName,
-				url: coreRepoCloneUrl(repoName, current.coreRepoOrg),
+				url: coreRepoCloneUrl(repoName, repo.org ?? current.coreRepoOrg),
 				env: await resolveShellEnv(),
 				onProgress: (message) =>
 					send("workspace:progress", { name: repoName, message }),

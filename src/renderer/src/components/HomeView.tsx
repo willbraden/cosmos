@@ -304,8 +304,15 @@ function RepoTile({
 				<div className="repo-card-copy">
 					<div className="repo-card-title-row">
 						<div className="repo-card-title">{repo.name}</div>
-						<span className={`repo-card-kind repo-card-kind-${kind}`}>
-							{kind === "core" ? "Core repo" : "Experiment"}
+						<span
+							className={`repo-card-kind repo-card-kind-${repo.team ? "team" : kind}`}
+							title={
+								repo.team
+									? `Registered as the "${repo.team}" Glayvin team layer`
+									: undefined
+							}
+						>
+							{repo.team ?? (kind === "core" ? "Core repo" : "Experiment")}
 						</span>
 						{repo.isSymlink && (
 							<span className="repo-card-kind repo-card-kind-linked">

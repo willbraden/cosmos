@@ -104,6 +104,8 @@ export interface WorkspaceRepoHealth {
 	linkTarget?: string;
 	/** Clone URL for the curated core repos. Absent for experiments. */
 	cloneUrl?: string;
+	/** Name of the Glayvin team layer registered at this path, when one is. */
+	team?: string;
 }
 
 /** Streamed while a long-running workspace operation (currently `git clone`) runs. */

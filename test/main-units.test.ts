@@ -21,6 +21,7 @@ import { ensureCosmosManagedAgentDir } from "../src/main/agent-home";
 import { fuzzyScore } from "../src/main/files";
 import {
 	inferGlayvinHomeFromAgentDir,
+	readGlayvinTeams,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
 import {
@@ -55,7 +56,10 @@ import {
 	cloneWorkspaceRepo,
 	coreRepoCloneUrl,
 	inspectWorkspace,
-	isCoreRepoName,
+	findCoreRepo,
+	resolveCoreRepos,
+	DEFAULT_CORE_REPOS,
+	TEAM_REPOS_FILE,
 	linkWorkspaceRepo,
 	cloneFailureMessage,
 	lastMeaningfulLine,
@@ -248,6 +252,45 @@ describe("glayvin runtime detection", () => {
 				"/fallback/.glayvin",
 			),
 		).toBe("/override/.glayvin");
+	});
+});
+
+describe("glayvin teams", () => {
+	function homeWith(config: string): string {
+		const home = mkdtempSync(join(tmpdir(), "cosmos-teams-"));
+		mkdirSync(join(home, ".local"), { recursive: true });
+		writeFileSync(join(home, ".local", "glayvin.json"), config);
+		return home;
+	}
+
+	it("reads registered teams, skipping entries it cannot resolve", () => {
+		const home = homeWith(
+			JSON.stringify({
+				teams: [
+					{ name: "cosmos-ai", path: "/Users/test/Cosmos/cosmos-ai" },
+					// Relative paths are repo-relative, so there is nothing to match against.
+					{ name: "relative", path: "./shared-config" },
+					{ name: "  padded  ", path: "/Users/test/padded" },
+					{ name: "", path: "/Users/test/nameless" },
+					{ path: "/Users/test/anonymous" },
+					"not-an-object",
+				],
+			}),
+		);
+		expect(readGlayvinTeams(home)).toEqual([
+			{ name: "cosmos-ai", path: "/Users/test/Cosmos/cosmos-ai" },
+			{ name: "padded", path: "/Users/test/padded" },
+		]);
+	});
+
+	it("degrades to no teams rather than throwing", () => {
+		expect(readGlayvinTeams(undefined)).toEqual([]);
+		expect(readGlayvinTeams("/nope/does-not-exist")).toEqual([]);
+		expect(readGlayvinTeams(homeWith("{ not json"))).toEqual([]);
+		expect(readGlayvinTeams(homeWith(JSON.stringify({})))).toEqual([]);
+		expect(readGlayvinTeams(homeWith(JSON.stringify({ teams: "nope" })))).toEqual(
+			[],
+		);
 	});
 });
 
@@ -561,6 +604,50 @@ describe("workspace repos", () => {
 		expect(health.readyRepos).toBe(1);
 	});
 
+	it("tags repos registered as a glayvin team layer", () => {
+		const root = workspace();
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "design-ops", path: join(root, "cosmos-ai") },
+		]);
+
+		expect(
+			health.repos.find((repo) => repo.name === "cosmos-ai")?.team,
+		).toBe("design-ops");
+		// A repo nobody registered carries no team, so the UI keeps its own label.
+		expect(
+			health.repos.find((repo) => repo.name === "neutron"),
+		).not.toHaveProperty("team");
+	});
+
+	it("matches a team registered against a linked checkout's target", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		mkdirSync(join(external, ".git"), { recursive: true });
+		linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: external });
+
+		// Trailing slashes are how a path lands when copied out of a shell.
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "platform", path: `${external}/` },
+		]);
+
+		expect(health.repos.find((repo) => repo.name === "neutron")?.team).toBe(
+			"platform",
+		);
+	});
+
+	it("tags experiments too, since a team can point anywhere", () => {
+		const root = workspace();
+		mkdirSync(join(root, "showcase"), { recursive: true });
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "showcase-team", path: join(root, "showcase") },
+		]);
+
+		expect(
+			health.experiments.find((repo) => repo.name === "showcase")?.team,
+		).toBe("showcase-team");
+	});
+
+
 	it("refuses to link over an existing entry or from inside the workspace", () => {
 		const root = workspace();
 		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
@@ -775,15 +862,111 @@ describe("clone failure context", () => {
 	});
 });
 
+describe("team-curated repo lists", () => {
+	function team(name: string, contents?: unknown) {
+		const path = mkdtempSync(join(tmpdir(), `cosmos-team-${name}-`));
+		if (contents !== undefined) {
+			writeFileSync(join(path, TEAM_REPOS_FILE), JSON.stringify(contents));
+		}
+		return { name, path };
+	}
+
+	it("replaces the built-in repos when a team publishes its own", () => {
+		const repos = resolveCoreRepos([
+			team("design-ops", { repos: ["cosmos-ai", "design-system"] }),
+		]);
+
+		expect(repos.map((repo) => repo.name)).toEqual([
+			"cosmos-ai",
+			"design-system",
+		]);
+	});
+
+	// Nobody has authored one of these files yet, so the untouched path is the
+	// one almost everybody takes.
+	it("falls back to the built-in repos when no team declares any", () => {
+		expect(resolveCoreRepos([])).toEqual(DEFAULT_CORE_REPOS);
+		expect(resolveCoreRepos([team("no-file")])).toEqual(DEFAULT_CORE_REPOS);
+		expect(resolveCoreRepos([team("empty", { repos: [] })])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+		expect(resolveCoreRepos([team("wrong-shape", { repos: "neutron" })])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+	});
+
+	it("survives a malformed file rather than emptying the home screen", () => {
+		const broken = mkdtempSync(join(tmpdir(), "cosmos-team-broken-"));
+		writeFileSync(join(broken, TEAM_REPOS_FILE), "{ not json");
+
+		expect(resolveCoreRepos([{ name: "broken", path: broken }])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+	});
+
+	it("unions across teams and keeps the first spelling of a repeat", () => {
+		const repos = resolveCoreRepos([
+			team("first", { org: "shipt", repos: ["neutron"] }),
+			team("second", { repos: [{ name: "neutron", org: "other" }, "segway-next"] }),
+		]);
+
+		expect(repos).toEqual([
+			{ name: "neutron", org: "shipt" },
+			{ name: "segway-next" },
+		]);
+	});
+
+	it("applies a per-repo org over the team org", () => {
+		const repos = resolveCoreRepos([
+			team("mixed", {
+				org: "shipt",
+				repos: ["neutron", { name: "widget", org: "acme-co" }],
+			}),
+		]);
+
+		expect(coreRepoCloneUrl("neutron", repos[0]?.org)).toBe(
+			"git@github.com:shipt/neutron.git",
+		);
+		expect(coreRepoCloneUrl("widget", repos[1]?.org)).toBe(
+			"git@github.com:acme-co/widget.git",
+		);
+	});
+
+	// These names reach both mkdir and a clone URL, so a bad one is worse than a
+	// missing one.
+	it("drops names that would escape the workspace or the URL path", () => {
+		const repos = resolveCoreRepos([
+			team("sloppy", {
+				repos: ["../evil", "a/b", ".git", "", "  ", 7, { name: "good-repo" }],
+			}),
+		]);
+
+		expect(repos).toEqual([{ name: "good-repo" }]);
+	});
+
+	it("re-sorts siblings into experiments when the core list changes", () => {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-workspace-"));
+		mkdirSync(join(root, "neutron"), { recursive: true });
+		const declared = resolveCoreRepos([
+			team("design-ops", { repos: ["design-system"] }),
+		]);
+		const health = inspectWorkspace(root, undefined, [], declared);
+
+		// neutron is built-in but unlisted here, so it demotes to an experiment.
+		expect(health.repos.map((repo) => repo.name)).toEqual(["design-system"]);
+		expect(health.experiments.map((repo) => repo.name)).toEqual(["neutron"]);
+	});
+});
+
 describe("core repo list", () => {
 	// shipt/nebula never existed. It sat in this list unnoticed because the list
 	// started life as folder names to look for, and only later became the source
 	// of clone URLs, where a name that is merely wrong turns into a 404.
 	it("lists repos that exist, not folder labels", () => {
 		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
-			expect(isCoreRepoName(name)).toBe(true);
+			expect(findCoreRepo(name)).toBeDefined();
 		}
-		expect(isCoreRepoName("nebula")).toBe(false);
+		expect(findCoreRepo("nebula")).toBeUndefined();
 	});
 
 	it("builds a clone URL for every core repo", () => {

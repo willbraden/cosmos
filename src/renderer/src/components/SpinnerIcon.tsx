@@ -21,9 +21,8 @@ export function SpinnerIcon({
 			style={{ "--spinner-size": `${size}px` } as CSSProperties}
 		>
 			{title ? <title>{title}</title> : null}
-			<circle className="outer" cx="12" cy="12" r="9.28" />
-			<circle className="middle" cx="12" cy="12" r="5.776" />
-			<circle className="inner" cx="12" cy="12" r="2.564" />
+			<circle className="outer" cx="12" cy="12" r="8.27067" />
+			<circle className="inner" cx="12" cy="12" r="3.06387" />
 		</svg>
 	);
 }
