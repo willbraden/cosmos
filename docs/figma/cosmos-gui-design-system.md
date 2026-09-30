@@ -213,11 +213,11 @@ Derived from `src/renderer/src/styles/app.css` and `src/renderer/src/App.tsx`.
 | App shell | `.app { display: flex; height: 100%; }` |
 | Main area | `.main { flex: 1; display: flex; flex-direction: column; }` |
 | Header height | `.main-header { height: 48px; }` |
-| Sidebar width | `.sidebar { width: 272px; }` |
+| Sidebar width | `.sidebar { width: 275px; }`, user-resizable `275px`–`600px` |
+| Collapsed sidebar rail width | `.sidebar-rail { width: 56px; }` |
 | Changes panel width | `.changes { width: 400px; }` |
 | Transcript content max width | `.transcript-inner { max-width: 780px; }` |
 | Composer content max width | `.composer-inner { max-width: 780px; }` |
-| Collapsed-sidebar header offset | `.sidebar-collapsed .main-header { padding-left: 84px; }` |
 
 ## Component inventory
 
@@ -303,36 +303,51 @@ Source:
 
 Real composition:
 
-- width `272px`
+- width `275px`, resizable by dragging `.sidebar-resizer` between `275px` and `600px`
 - vertical flex layout
 - background is a real gradient from `surface-raised` to a color-mixed `surface-secondary`
 - right border on the shell
+- collapses to a `56px` icon rail (`.sidebar-rail`) instead of unmounting
 
 Subparts present in code:
 
 - `.sidebar-top`
-- `.sidebar-top-row`
-- `.search`
+- `.sidebar-top-row` — Home nav button, then search and collapse icon buttons
 - `.sidebar-list`
 - `.sidebar-section`
 - `.sidebar-section-header`
-- `.sidebar-footer`
+- `.sidebar-footer` — settings only
 - `.sidebar-empty`
+- `.sidebar-resizer`
+- `.sidebar-rail`, `.sidebar-rail-top`, `.sidebar-rail-footer`
 
-### 6. Search field (`.search`)
+### 6. Sidebar resizer (`.sidebar-resizer`)
 
 Source: `src/renderer/src/styles/app.css`, `src/renderer/src/components/Sidebar.tsx`
 
 Real properties:
 
-- height `30px`
-- horizontal padding `8px`
-- radius `8px`
-- neutral secondary background by default
-- focus-within adds neutral border and normal background
-- contains an `input` with transparent background and no border
+- absolutely positioned on the sidebar's right edge, `width: 7px`, `right: -3px`
+- transparent by default; `var(--color-border-neutral-normal)` on hover, focus, and while dragging
+- `cursor: col-resize`
+- `role="separator"`; arrow keys resize by `8px` (`32px` with Shift), double-click resets to `275px`
+- `.sidebar.resizing` disables text selection during a drag
 
-### 7. Session row (`.session-row`)
+### 7. Search modal (`.search-modal`)
+
+Source: `src/renderer/src/components/SearchModal.tsx`, `src/renderer/src/styles/app.css`
+
+Opened by the sidebar search button or `⌘K`. Replaces the former inline `.search` field.
+
+Real properties:
+
+- backdrop `.modal-backdrop.search-modal-backdrop` aligns to `flex-start` with `padding-top: 12vh`
+- panel `.modal.search-modal` is `min(560px, calc(100vw - 48px))` wide, height `auto`, capped at `min(460px, calc(100vh - 160px))`
+- `.search-modal-input` is a `48px` row with a search icon, transparent input, and an `esc` hint
+- `.search-modal-results` scrolls with `6px` padding
+- `.search-hit` rows are `34px` min-height, radius `8px`, with `.title` and `.meta` slots; `.search-hit.active` uses the neutral subtle hover background
+
+### 8. Session row (`.session-row`)
 
 Source:
 
@@ -345,8 +360,8 @@ Real row parts and states:
 | --- | --- |
 | base row | `.session-row` |
 | dragging | `.session-row.dragging` |
-| hover | `.session-row:hover` |
-| active | `.session-row.active` |
+| hover | `.session-row:hover` — `rgb(0 0 0 / 0.05)` |
+| active | `.session-row.active` — raised background plus a 1px ring, no drop shadow |
 | unread | `.session-row.unread .title` |
 | drop before | `.session-row.drop-before` |
 | drop after | `.session-row.drop-after` |
@@ -362,7 +377,7 @@ Related adornments:
 - `.session-dropzone`
 - `.session-dropzone.active`
 
-### 8. Main header (`.main-header`)
+### 9. Main header (`.main-header`)
 
 Source:
 
@@ -386,7 +401,7 @@ Subparts present in code:
 - context meter from `ContextMeter`
 - action icon buttons
 
-### 9. Context meter
+### 10. Context meter
 
 Source: `src/renderer/src/components/ChatView.tsx`
 
@@ -399,7 +414,7 @@ Real behavior:
 
 Unresolved note: `ContextMeter` references CSS vars `--danger`, `--warning`, `--accent`, and `--border-strong` in inline styles. Those token names were not found in `src/renderer/src/styles/tokens.css` during this review. Do not normalize them in Figma without a code decision.
 
-### 10. Transcript shell
+### 11. Transcript shell
 
 Source:
 
@@ -415,7 +430,7 @@ Real layout primitives:
 - tool calls render through `ToolCard`
 - markdown text renders through `Markdown`
 
-### 11. Markdown / code block
+### 12. Markdown / code block
 
 Source:
 
@@ -429,7 +444,7 @@ Real parts:
 - syntax color vars `--hl-keyword`, `--hl-string`, `--hl-number`, `--hl-comment`, `--hl-title`, `--hl-attr`
 - `CopyButton` uses `.icon-btn`
 
-### 12. Reasoning fold / tool fold (`.fold`)
+### 13. Reasoning fold / tool fold (`.fold`)
 
 Source:
 
@@ -448,7 +463,7 @@ Real parts:
 - `.thinking-body`
 - `.tool-body`
 
-### 13. Diff view
+### 14. Diff view
 
 Source:
 
@@ -464,7 +479,7 @@ Real parts visible in CSS:
 - `.diff-line.hunk`
 - `.diff-line .text`
 
-### 14. Composer
+### 15. Composer
 
 Source:
 
@@ -500,7 +515,7 @@ Behavior verified in React code:
 - send behavior changes while busy
 - stop action is exposed on `Escape` while busy
 
-### 15. Popover / menu patterns
+### 16. Popover / menu patterns
 
 Source:
 
@@ -517,7 +532,7 @@ Real patterns present in code:
 - `.filter`
 - segmented control `.segmented`
 
-### 16. Switch
+### 17. Switch
 
 Source: `src/renderer/src/components/SettingsModal.tsx`, `src/renderer/src/styles/app.css`
 
@@ -533,7 +548,7 @@ Real visual states:
 - `.switch.on`
 - `.switch.on::after`
 
-### 17. Settings row (`Setting`)
+### 18. Settings row (`Setting`)
 
 Source: `src/renderer/src/components/SettingsModal.tsx`, `src/renderer/src/styles/app.css`
 
@@ -551,7 +566,7 @@ Real style parts:
 - `.setting-text .help`
 - `.setting-control`
 
-### 18. Dialog card
+### 19. Dialog card
 
 Source:
 
@@ -574,7 +589,7 @@ Real parts in React:
 - `.dialog-card-body`
 - `.dialog-card-actions`
 
-### 19. Changes panel
+### 20. Changes panel
 
 Source:
 
@@ -595,7 +610,7 @@ Real parts:
 - `.change-file`
 - `.change-file-header`
 
-### 20. Empty-state patterns
+### 21. Empty-state patterns
 
 Source:
 
@@ -612,7 +627,7 @@ Real elements seen in code/CSS:
 - `.welcome-card`
 - Home cards like `.home-suggestion`, `.repo-card`
 
-### 21. Toast
+### 22. Toast
 
 Source: `src/renderer/src/components/Toasts.tsx`, `src/renderer/src/styles/app.css`
 
@@ -623,7 +638,7 @@ Real parts:
 - `.toast.error` and other level classes if present in CSS
 - text plus optional action plus dismiss button
 
-### 22. Cosmos mark
+### 23. Cosmos mark
 
 Source: `src/renderer/src/components/CosmosMark.tsx`
 
@@ -660,7 +675,7 @@ Create only the following components because they exist in code today:
 - Icon Button
 - Chip
 - KBD
-- Search Field
+- Search Modal
 - Session Row
 - Sidebar Section Header
 - Header Title
@@ -708,7 +723,7 @@ Do not add a generic card, badge, tag, tab bar, or navigation rail unless you fi
 
 Use existing interface concepts only:
 
-- left sidebar with search field, grouped session rows, footer actions
+- left sidebar with a top row (Home, search, collapse), grouped session rows, settings footer
 - header with editable title, project chip, context meter, fork button, changes button
 - transcript with at least:
   - one user bubble
@@ -745,7 +760,7 @@ For those, treat Code Connect readiness as naming and source mapping, not as a c
 - [ ] Create light and dark color variables from `src/renderer/src/styles/tokens.css`
 - [ ] Create text styles from the semantic typography token groups
 - [ ] Create spacing and radius variables from `src/renderer/src/styles/tokens.css`
-- [ ] Rebuild the left sidebar using only `Sidebar.tsx` structure and `.sidebar*`, `.search`, `.session-row` styles
+- [ ] Rebuild the left sidebar using only `Sidebar.tsx` structure and `.sidebar*`, `.session-row` styles
 - [ ] Rebuild the main header from `ChatView.tsx` and `.main-header`, `.header-title`, `.chip`, `.icon-btn`
 - [ ] Rebuild the composer from `Composer.tsx` and `.composer*`, `.send-btn`, `.queue-item`, `.attachment`
 - [ ] Rebuild the changes panel from `ChangesPanel.tsx` and `.changes*`, `.change-file*`

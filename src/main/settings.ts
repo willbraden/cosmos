@@ -7,6 +7,8 @@ import {
 	type DesktopSettings,
 	type ModelRef,
 	type PermissionMode,
+	SIDEBAR_MAX_WIDTH,
+	SIDEBAR_MIN_WIDTH,
 	type ThemePreference,
 } from "../shared/ipc";
 import { isValidOrgName } from "./workspace";
@@ -56,6 +58,15 @@ export function sanitizeSettingsPatch(
 		out.notifications = raw.notifications;
 	if (typeof raw.sidebarCollapsed === "boolean")
 		out.sidebarCollapsed = raw.sidebarCollapsed;
+	if (
+		typeof raw.sidebarWidth === "number" &&
+		Number.isFinite(raw.sidebarWidth)
+	) {
+		out.sidebarWidth = Math.min(
+			SIDEBAR_MAX_WIDTH,
+			Math.max(SIDEBAR_MIN_WIDTH, Math.round(raw.sidebarWidth)),
+		);
+	}
 	if (typeof raw.developerMode === "boolean")
 		out.developerMode = raw.developerMode;
 	if (typeof raw.figmaChatContextGate === "boolean")
