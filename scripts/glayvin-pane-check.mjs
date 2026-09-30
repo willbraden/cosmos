@@ -3,7 +3,7 @@
 //   node scripts/glayvin-pane-check.mjs <outDir>
 
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,8 +15,12 @@ const electron = createRequire(import.meta.url)("electron");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // macOS caps unix socket paths at 104 bytes, and the supervisor puts its socket
-// inside this dir, so keep the path short or the app never opens a window.
-const userData = mkdtempSync(join(tmpdir(), "cg-"));
+// inside this dir, so keep the path short or the app never opens a window --
+// which surfaces as "no debuggable page", not as a path-length error. The
+// default TMPDIR on macOS is a ~50-char /var/folders path, close enough to the
+// cap to matter once a socket name is appended.
+const tmpRoot = existsSync("/tmp") ? "/tmp" : tmpdir();
+const userData = mkdtempSync(join(tmpRoot, "cg-"));
 // Point at the real Glayvin home so the pane has something to show, but keep
 // app settings and sessions in the throwaway dir.
 writeFileSync(
