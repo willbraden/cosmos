@@ -9,11 +9,17 @@ vi.mock("electron-log/main", () => ({
 }));
 
 import * as bridge from "../resources/pi-extension/desktop-bridge";
+import { ensureCosmosManagedAgentDir } from "../src/main/agent-home";
 import { fuzzyScore } from "../src/main/files";
 import {
 	inferGlayvinHomeFromAgentDir,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
+import {
+	managedWorktreeRoot,
+	planManagedWorktree,
+	sanitizeSegment,
+} from "../src/main/worktrees";
 import {
 	buildFigmaPiAuthEntry,
 	piOauthTokensPath,
@@ -102,11 +108,65 @@ describe("desktop bridge extension", () => {
 	});
 });
 
+describe("managed worktrees", () => {
+	it("sanitizes worktree path and branch segments safely", () => {
+		expect(sanitizeSegment(" Feature Branch / Weird Name ")).toBe(
+			"feature-branch-weird-name",
+		);
+		expect(sanitizeSegment("***", 12)).toBe("");
+	});
+
+	it("plans managed worktrees under a repo-scoped root", () => {
+		const root = managedWorktreeRoot(
+			"/tmp/cosmos",
+			"/Users/test/Cosmos/cosmos-gui",
+		);
+		expect(root).toBe("/tmp/cosmos/worktrees/cosmos-gui");
+		expect(planManagedWorktree(root, "task 123", "worker:abc")).toEqual({
+			path: "/tmp/cosmos/worktrees/cosmos-gui/task-123-worker-abc",
+			branch: "cosmos/task-123/worker-abc",
+		});
+	});
+});
+
+describe("cosmos managed agent home", () => {
+	it("merges seeded runtime packages into the managed profile", () => {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-managed-agent-"));
+		const userData = join(root, "user-data");
+		const seed = join(root, "seed-agent");
+		const cosmosPackage = join(root, "cosmos-package");
+		mkdirSync(seed, { recursive: true });
+		mkdirSync(cosmosPackage, { recursive: true });
+		writeFileSync(
+			join(seed, "settings.json"),
+			JSON.stringify({
+				defaultProvider: "github-copilot",
+				packages: [
+					"npm:pi-mcp-adapter@2.21.2",
+					"npm:pi-lens@4.0.0",
+					"npm:@gotgenes/pi-permission-system@24.0.0",
+				],
+			}),
+		);
+		const managed = ensureCosmosManagedAgentDir(userData, [seed], cosmosPackage);
+		const settings = JSON.parse(
+			readFileSync(join(managed, "settings.json"), "utf8"),
+		) as {
+			packages?: unknown[];
+		};
+		expect(settings.packages).toEqual([
+			"npm:pi-mcp-adapter@2.21.2",
+			"npm:pi-lens@4.0.0",
+			{ source: cosmosPackage },
+		]);
+	});
+});
+
 describe("glayvin runtime detection", () => {
 	it("infers GLAYVIN_HOME from a glayvin-style agent dir", () => {
-		expect(
-			inferGlayvinHomeFromAgentDir("/Users/test/.glayvin/.pi/agent"),
-		).toBe("/Users/test/.glayvin");
+		expect(inferGlayvinHomeFromAgentDir("/Users/test/.glayvin/.pi/agent")).toBe(
+			"/Users/test/.glayvin",
+		);
 		expect(inferGlayvinHomeFromAgentDir("/tmp/custom-agent")).toBeUndefined();
 	});
 
@@ -173,12 +233,16 @@ describe("mcp config helpers", () => {
 			"figma",
 			"graphos",
 		]);
-		expect(overview.servers.find((server) => server.name === "figma")).toMatchObject({
+		expect(
+			overview.servers.find((server) => server.name === "figma"),
+		).toMatchObject({
 			active: true,
 			personal: false,
 			auth: "oauth",
 		});
-		expect(overview.servers.find((server) => server.name === "graphos")).toMatchObject({
+		expect(
+			overview.servers.find((server) => server.name === "graphos"),
+		).toMatchObject({
 			active: false,
 			personal: true,
 			transport: "command",
@@ -250,7 +314,9 @@ describe("mcp config helpers", () => {
 			"figma",
 			"localdemo",
 		]);
-		expect(overview.servers.find((server) => server.name === "figma")).toMatchObject({
+		expect(
+			overview.servers.find((server) => server.name === "figma"),
+		).toMatchObject({
 			active: true,
 			personal: true,
 			auth: "oauth",
@@ -274,15 +340,25 @@ describe("mcp config helpers", () => {
 			command: "npx",
 			args: ["-y", "test-mcp"],
 		});
-		let overview = await getMcpOverview(glayvinHome, join(glayvinHome, ".pi", "agent"));
-		expect(overview.servers.find((server) => server.name === "test-server")).toMatchObject({
+		let overview = await getMcpOverview(
+			glayvinHome,
+			join(glayvinHome, ".pi", "agent"),
+		);
+		expect(
+			overview.servers.find((server) => server.name === "test-server"),
+		).toMatchObject({
 			personal: true,
 			active: false,
 		});
 
 		removePersonalMcpServer(glayvinHome, "test-server");
-		overview = await getMcpOverview(glayvinHome, join(glayvinHome, ".pi", "agent"));
-		expect(overview.servers.find((server) => server.name === "test-server")).toBeUndefined();
+		overview = await getMcpOverview(
+			glayvinHome,
+			join(glayvinHome, ".pi", "agent"),
+		);
+		expect(
+			overview.servers.find((server) => server.name === "test-server"),
+		).toBeUndefined();
 	});
 });
 

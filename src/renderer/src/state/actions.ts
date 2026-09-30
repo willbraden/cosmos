@@ -38,6 +38,7 @@ import {
 	updateTab,
 	useStore,
 } from "./store";
+import { tabsNeedPermissionModeSync } from "./permission-mode";
 
 const cmd = <T = unknown>(
 	tabId: string,
@@ -59,7 +60,10 @@ function applyLatestAssistantDuration(
 	return chat;
 }
 
-function suppressHiddenPrompts(chat: ChatState, hiddenPrompts: string[]): { chat: ChatState; hiddenPrompts: string[] } {
+function suppressHiddenPrompts(
+	chat: ChatState,
+	hiddenPrompts: string[],
+): { chat: ChatState; hiddenPrompts: string[] } {
 	if (hiddenPrompts.length === 0) return { chat, hiddenPrompts };
 	let items = chat.items;
 	const remaining = [...hiddenPrompts];
@@ -78,7 +82,10 @@ function suppressHiddenPrompts(chat: ChatState, hiddenPrompts: string[]): { chat
 			break;
 		}
 	}
-	return { chat: items === chat.items ? chat : { ...chat, items }, hiddenPrompts: remaining };
+	return {
+		chat: items === chat.items ? chat : { ...chat, items },
+		hiddenPrompts: remaining,
+	};
 }
 
 // ---- Boot ------------------------------------------------------------------
@@ -96,10 +103,14 @@ export async function bootstrap(): Promise<void> {
 	api.onSessionsChanged(() => void refreshSessions());
 	api.onSettingsChanged((next) => {
 		const prev = useStore.getState().settings;
+		const needsPermissionSync = tabsNeedPermissionModeSync(
+			Object.values(useStore.getState().tabs),
+			next.permissionMode,
+		);
 		useStore.setState({ settings: next });
 		applyTheme(next.theme);
-		if (prev.permissionMode !== next.permissionMode) {
-			void syncPermissionModeToOpenTabs(next.permissionMode);
+		if (needsPermissionSync) {
+			void applyPermissionModeToAllOpenSessions(next.permissionMode);
 		}
 		if (
 			prev.agentDirPath !== next.agentDirPath ||
@@ -146,7 +157,10 @@ async function restoreLiveSessions(live: LiveSessionState): Promise<boolean> {
 				status: "starting" as const,
 				isStreaming: tab.isStreaming,
 				isCompacting: tab.isCompacting,
-				dialogs: tab.dialogs.map((dialog) => ({ ...dialog, receivedAt: Date.now() })),
+				dialogs: tab.dialogs.map((dialog) => ({
+					...dialog,
+					receivedAt: Date.now(),
+				})),
 				statuses: tab.statuses,
 				widgets: tab.widgets,
 			},
@@ -155,12 +169,14 @@ async function restoreLiveSessions(live: LiveSessionState): Promise<boolean> {
 	const activeTabId =
 		live.visibleTabId && tabs[live.visibleTabId]
 			? live.visibleTabId
-			: [...live.tabs].sort((a, b) => b.openedAt - a.openedAt)[0]?.tabId ?? null;
+			: ([...live.tabs].sort((a, b) => b.openedAt - a.openedAt)[0]?.tabId ?? null);
 	useStore.setState({
 		tabs,
 		activeTabId,
 		pendingNewSession: false,
-		focusComposerTick: activeTabId ? useStore.getState().focusComposerTick + 1 : 0,
+		focusComposerTick: activeTabId
+			? useStore.getState().focusComposerTick + 1
+			: 0,
 	});
 	api.setVisibleSession(activeTabId);
 	await Promise.allSettled(live.tabs.map((tab) => loadTab(tab.tabId)));
@@ -211,9 +227,9 @@ async function onCredentialsChanged(): Promise<void> {
 	if (tab && !tab.isStreaming) await loadTab(tab.tabId);
 }
 
-async function syncPermissionModeToOpenTabs(
+export async function applyPermissionModeToAllOpenSessions(
 	mode: PermissionMode,
-): Promise<void> {
+): Promise<number> {
 	const tabs = Object.values(useStore.getState().tabs);
 	useStore.setState((state) => ({
 		tabs: Object.fromEntries(
@@ -223,11 +239,13 @@ async function syncPermissionModeToOpenTabs(
 			]),
 		),
 	}));
+	const openTabs = tabs.filter((tab) => tab.opened);
 	await Promise.allSettled(
-		tabs
-			.filter((tab) => tab.opened)
-			.map((tab) => cmd(tab.tabId, { type: "desktop_set_permission_mode", mode })),
+		openTabs.map((tab) =>
+			cmd(tab.tabId, { type: "desktop_set_permission_mode", mode }),
+		),
 	);
+	return openTabs.length;
 }
 
 // ---- Opening sessions ------------------------------------------------------
@@ -371,11 +389,15 @@ export async function loadTab(tabId: string): Promise<void> {
 		useStore.setState({ models: models.models });
 		updateTab(tabId, (tab) => {
 			const suppressed = suppressHiddenPrompts(
-				mergeReloadedChat(tab.chat, chatFromEntries(entries.entries, entries.leafId)),
+				mergeReloadedChat(
+					tab.chat,
+					chatFromEntries(entries.entries, entries.leafId),
+				),
 				tab.hiddenPrompts,
 			);
 			const autoTitle =
-				tab.autoTitle || autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
+				tab.autoTitle ||
+				autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
 			return {
 				status: "ready",
 				error: undefined,
@@ -384,7 +406,9 @@ export async function loadTab(tabId: string): Promise<void> {
 				name: state.sessionName,
 				autoTitle,
 				model:
-					state.model && state.model.provider !== "unknown" ? state.model : undefined,
+					state.model && state.model.provider !== "unknown"
+						? state.model
+						: undefined,
 				thinkingLevel: state.thinkingLevel,
 				thinkingLevels: levels.levels,
 				isStreaming: state.isStreaming,
@@ -414,10 +438,14 @@ async function refreshAfterRun(tabId: string): Promise<void> {
 		updateTab(tabId, (tab) => {
 			const nextChat = tab.isStreaming
 				? tab.chat
-				: mergeReloadedChat(tab.chat, chatFromEntries(entries.entries, entries.leafId));
+				: mergeReloadedChat(
+						tab.chat,
+						chatFromEntries(entries.entries, entries.leafId),
+					);
 			const suppressed = suppressHiddenPrompts(nextChat, tab.hiddenPrompts);
 			const autoTitle =
-				tab.autoTitle || autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
+				tab.autoTitle ||
+				autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
 			return {
 				// A run that started while we were fetching owns the transcript now.
 				chat: suppressed.chat,
@@ -556,7 +584,8 @@ function handleEventBatch(batch: SessionEventBatch): void {
 	updateTab(batch.tabId, (tab) => {
 		const suppressed = suppressHiddenPrompts(chat, tab.hiddenPrompts);
 		const autoTitle =
-			tab.autoTitle || autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
+			tab.autoTitle ||
+			autoTitleFromFirstMessage(firstUserMessage(suppressed.chat));
 		return {
 			...patch,
 			autoTitle,
@@ -801,6 +830,63 @@ export function removeAttachment(tabId: string, id: string): void {
 	}));
 }
 
+function looksLikeFigmaPrompt(text: string): boolean {
+	const lower = text.toLowerCase();
+	if (lower.includes("figma.com/")) return true;
+	if (!lower.includes("figma")) return false;
+	return [
+		"file",
+		"frame",
+		"prototype",
+		"design",
+		"library",
+		"component",
+		"mockup",
+		"create",
+		"edit",
+		"update",
+		"import",
+		"export",
+		"sync",
+		"inspect",
+		"open",
+	].some((word) => lower.includes(word));
+}
+
+async function shouldGateForFigmaPrompt(text: string): Promise<string | null> {
+	if (!useStore.getState().settings.figmaChatContextGate) return null;
+	if (!looksLikeFigmaPrompt(text)) return null;
+	const overview = await api.getMcpOverview();
+	const figma = overview.servers.find(
+		(server) => server.name === "figma" && server.active,
+	);
+	if (!figma) {
+		return "This request needs the Figma MCP, but Cosmos cannot see the team-shared Figma server yet.";
+	}
+	if (figma.sessionAvailable === true) return null;
+	if (figma.sessionAvailabilityMessage) return figma.sessionAvailabilityMessage;
+	if (figma.oauthConnected) {
+		return "Cosmos found the Figma sign-in, but fresh sessions still are not loading the Figma tools.";
+	}
+	return "This request needs Figma access first. Connect Figma once, then Cosmos can continue from chat.";
+}
+
+async function sendPromptMessage(
+	tabId: string,
+	text: string,
+	attachments: Attachment[],
+	mode?: "steer" | "followUp",
+): Promise<void> {
+	const tab = getTab(tabId);
+	if (!tab) return;
+	const images: ImageContent[] = attachments.map((a) => a.image);
+	const command: Record<string, unknown> = { type: "prompt", message: text };
+	if (images.length) command.images = images;
+	if (tab.isStreaming)
+		command.streamingBehavior = mode ?? useStore.getState().settings.busySendMode;
+	await cmd(tabId, command as { type: string });
+}
+
 export async function sendDraft(
 	tabId: string,
 	mode?: "steer" | "followUp",
@@ -827,19 +913,77 @@ export async function sendDraft(
 		return;
 	}
 
-	updateTab(tabId, () => ({ draft: "", attachments: [] }));
-	const images: ImageContent[] = attachments.map((a) => a.image);
-	const command: Record<string, unknown> = { type: "prompt", message: text };
-	if (images.length) command.images = images;
-	if (tab.isStreaming)
-		command.streamingBehavior = mode ?? useStore.getState().settings.busySendMode;
 	try {
-		await cmd(tabId, command as { type: string });
+		const figmaBlockMessage = await shouldGateForFigmaPrompt(text);
+		if (figmaBlockMessage) {
+			updateTab(tabId, () => ({
+				draft: "",
+				attachments: [],
+				figmaAssist: {
+					blockedPrompt: text,
+					blockedAttachments: attachments,
+					message: figmaBlockMessage,
+				},
+			}));
+			return;
+		}
+	} catch (error) {
+		reportSendError(error);
+		return;
+	}
+
+	updateTab(tabId, () => ({ draft: "", attachments: [] }));
+	try {
+		await sendPromptMessage(tabId, text, attachments, mode);
 	} catch (error) {
 		// Put the message back so nothing typed is lost.
 		updateTab(tabId, (t) => ({
 			draft: t.draft ? `${text}\n\n${t.draft}` : text,
 			attachments: [...attachments, ...t.attachments],
+		}));
+		reportSendError(error);
+	}
+}
+
+export function dismissBlockedFigmaPrompt(
+	tabId: string,
+	restore = false,
+): void {
+	updateTab(tabId, (tab) => ({
+		figmaAssist: undefined,
+		draft: restore
+			? tab.draft
+				? `${tab.figmaAssist?.blockedPrompt ?? ""}\n\n${tab.draft}`
+				: (tab.figmaAssist?.blockedPrompt ?? "")
+			: tab.draft,
+		attachments: restore
+			? [...(tab.figmaAssist?.blockedAttachments ?? []), ...tab.attachments]
+			: tab.attachments,
+	}));
+}
+
+export async function retryBlockedFigmaPrompt(
+	tabId: string,
+	mode?: "steer" | "followUp",
+): Promise<void> {
+	const tab = getTab(tabId);
+	const blocked = tab?.figmaAssist;
+	if (!tab || !blocked) return;
+	updateTab(tabId, () => ({ figmaAssist: undefined }));
+	try {
+		await sendPromptMessage(
+			tabId,
+			blocked.blockedPrompt,
+			blocked.blockedAttachments,
+			mode,
+		);
+	} catch (error) {
+		updateTab(tabId, (current) => ({
+			figmaAssist: blocked,
+			draft: current.draft
+				? `${blocked.blockedPrompt}\n\n${current.draft}`
+				: blocked.blockedPrompt,
+			attachments: [...blocked.blockedAttachments, ...current.attachments],
 		}));
 		reportSendError(error);
 	}
@@ -1156,6 +1300,14 @@ export async function deleteSession(sessionPath: string): Promise<void> {
 	} catch (error) {
 		toast("error", errorMessage(error));
 	}
+}
+
+export async function confirmDeleteSession(
+	sessionPath: string,
+	title: string,
+): Promise<void> {
+	if (!window.confirm(`Move "${title}" to the Trash?`)) return;
+	await deleteSession(sessionPath);
 }
 
 export async function togglePin(sessionPath: string): Promise<void> {

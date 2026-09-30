@@ -35,6 +35,8 @@ const IMAGE_TYPES = new Set([
 	"image/webp",
 ]);
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+/** Below this composer width the toolbar drops labels and the placeholder shortens. */
+const COMPACT_WIDTH = 520;
 
 interface Suggestion {
 	key: string;
@@ -93,13 +95,26 @@ export function Composer({
 }) {
 	const textarea = useRef<HTMLTextAreaElement>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
+	const inner = useRef<HTMLDivElement>(null);
 	const focusTick = useStore((s) => s.focusComposerTick);
 	const busySendMode = useStore((s) => s.settings.busySendMode);
 	const [trigger, setTrigger] = useState<Trigger | null>(null);
 	const [files, setFiles] = useState<FileMatch[]>([]);
 	const [selected, setSelected] = useState(0);
 	const [dragging, setDragging] = useState(false);
+	const [compact, setCompact] = useState(false);
 	const busy = tab.isStreaming || tab.isCompacting;
+
+	// Keep the placeholder short enough to stay on one line when space is tight.
+	useLayoutEffect(() => {
+		const el = inner.current;
+		if (!el) return;
+		const observer = new ResizeObserver(([entry]) => {
+			setCompact(entry.contentRect.width < COMPACT_WIDTH);
+		});
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, []);
 
 	useEffect(() => {
 		textarea.current?.focus();
@@ -263,11 +278,19 @@ export function Composer({
 	];
 	const placeholder = busy
 		? busySendMode === "steer"
-			? "Pi is working — send a message to steer it"
-			: "Pi is working — messages will be sent when it finishes"
+			? compact
+				? "Send a message to steer Cosmos…"
+				: "Cosmos is working — send a message to steer it"
+			: compact
+				? "Queued until Cosmos finishes…"
+				: "Cosmos is working — messages will be sent when it finishes"
 		: tab.model
-			? "Message pi…  (@ to mention files, / for commands, ! for shell)"
-			: "Connect a model provider to get started";
+			? compact
+				? "Message Cosmos…"
+				: "Message Cosmos…  (@ to mention files, / for commands, ! for shell)"
+			: compact
+				? "Connect a provider…"
+				: "Connect a model provider to get started";
 
 	const above = Object.entries(tab.widgets).filter(
 		([, w]) => w.placement === "aboveEditor",
@@ -307,7 +330,10 @@ export function Composer({
 					))}
 				</div>
 			)}
-			<div className="composer-inner">
+			<div
+				className={`composer-inner${compact ? " compact" : ""}`}
+				ref={inner}
+			>
 				{trigger && suggestions.length > 0 && (
 					<div className="popover up" style={{ left: 0, right: 0 }} role="listbox">
 						{suggestions.map((s, index) => (
@@ -439,9 +465,16 @@ export function Composer({
 					{busy && (
 						<>
 							<span>
-								<span className="kbd">esc</span> to stop ·{" "}
-								<span className="kbd">⌥ enter</span> to{" "}
-								{busySendMode === "steer" ? "send after it finishes" : "steer now"}
+								<span className="kbd">esc</span> to stop
+								{!compact && (
+									<>
+										{" · "}
+										<span className="kbd">⌥ enter</span> to{" "}
+										{busySendMode === "steer"
+											? "send after it finishes"
+											: "steer now"}
+									</>
+								)}
 							</span>
 							{statuses.length > 0 && <span className="spacer" />}
 						</>

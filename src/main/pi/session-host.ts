@@ -11,7 +11,11 @@ import type {
 	SessionExit,
 	SessionWidgetState,
 } from "../../shared/ipc";
-import type { ExtensionUiRequest, PiRecord, SessionState } from "../../shared/pi-types";
+import type {
+	ExtensionUiRequest,
+	PiRecord,
+	SessionState,
+} from "../../shared/pi-types";
 import { PiProcess } from "./pi-process";
 
 export interface HostEnvironment {
@@ -51,6 +55,14 @@ const SESSION_CHANGING = new Set([
 	"switch_session",
 	"fork",
 	"clone",
+]);
+const RESTART_SAFE_COMMANDS = new Set([
+	"get_state",
+	"get_entries",
+	"get_available_models",
+	"get_available_thinking_levels",
+	"get_commands",
+	"get_session_stats",
 ]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VALID_MODES = new Set<PermissionMode>(["ask", "acceptEdits", "auto"]);
@@ -146,10 +158,16 @@ export class SessionHost {
 			command.type === "follow_up"
 		)
 			tab.busy = true;
-		const data = await proc.request(command);
-		if (SESSION_CHANGING.has(command.type))
-			await this.refreshSessionPath(tab, proc);
-		return data;
+		try {
+			const data = await proc.request(command);
+			if (SESSION_CHANGING.has(command.type))
+				await this.refreshSessionPath(tab, proc);
+			return data;
+		} catch (error) {
+			if (!this.shouldRetryAfterRestart(command.type, error)) throw error;
+			const restarted = await this.ensureProcess(tab);
+			return await restarted.request(command);
+		}
 	}
 
 	respondToUi(tabId: string, response: Record<string, unknown>): void {
@@ -180,9 +198,10 @@ export class SessionHost {
 
 	snapshot(): LiveSessionState {
 		return {
-			visibleTabId: this.visibleTabId && this.tabs.has(this.visibleTabId)
-				? this.visibleTabId
-				: null,
+			visibleTabId:
+				this.visibleTabId && this.tabs.has(this.visibleTabId)
+					? this.visibleTabId
+					: null,
 			tabs: [...this.tabs.values()].map((tab) => ({
 				tabId: tab.id,
 				openedAt: tab.openedAt,
@@ -236,6 +255,15 @@ export class SessionHost {
 		const tab = typeof tabId === "string" ? this.tabs.get(tabId) : undefined;
 		if (!tab) throw new Error("Unknown session");
 		return tab;
+	}
+
+	private shouldRetryAfterRestart(commandType: string, error: unknown): boolean {
+		if (!RESTART_SAFE_COMMANDS.has(commandType)) return false;
+		const message = error instanceof Error ? error.message : String(error);
+		return (
+			message.includes("pi exited (") ||
+			message.includes("pi process is not running")
+		);
 	}
 
 	private ensureProcess(tab: Tab): Promise<PiProcess> {
@@ -380,12 +408,12 @@ export class SessionHost {
 				const { [record.widgetKey]: _old, ...rest } = tab.widgets;
 				tab.widgets = record.widgetLines?.length
 					? {
-						...rest,
-						[record.widgetKey]: {
-							lines: [...record.widgetLines],
-							placement: record.widgetPlacement ?? "aboveEditor",
-						},
-					}
+							...rest,
+							[record.widgetKey]: {
+								lines: [...record.widgetLines],
+								placement: record.widgetPlacement ?? "aboveEditor",
+							},
+						}
 					: rest;
 				break;
 			}

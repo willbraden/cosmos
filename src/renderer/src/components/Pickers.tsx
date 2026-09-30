@@ -44,7 +44,7 @@ function Dropdown({
 	const close = () => setOpen(false);
 	useDismiss(ref, open, close);
 	return (
-		<div ref={ref} style={{ position: "relative" }}>
+		<div ref={ref} className="dropdown">
 			<button type="button" className="chip" title={title} onClick={() => setOpen(!open)} aria-expanded={open}>
 				{trigger}
 				<ChevronDown size={12} />
@@ -73,7 +73,7 @@ export function PermissionPicker({ tab }: { tab: TabState }) {
 			trigger={
 				<>
 					<Icon size={13} />
-					<span>{current.label}</span>
+					<span className="chip-label">{current.label}</span>
 				</>
 			}
 			width={300}
@@ -128,7 +128,7 @@ export function ModelPicker({ tab }: { tab: TabState }) {
 			trigger={
 				<>
 					<Cpu size={13} />
-					<span>{tab.model?.name ?? "No model"}</span>
+					<span className="chip-label">{tab.model?.name ?? "No model"}</span>
 				</>
 			}
 		>
@@ -206,7 +206,7 @@ export function ThinkingPicker({ tab }: { tab: TabState }) {
 			trigger={
 				<>
 					<Brain size={13} />
-					<span>{LEVEL_LABELS[tab.thinkingLevel] ?? tab.thinkingLevel}</span>
+					<span className="chip-label">{LEVEL_LABELS[tab.thinkingLevel] ?? tab.thinkingLevel}</span>
 				</>
 			}
 		>

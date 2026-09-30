@@ -10,6 +10,7 @@ import {
 	Folder,
 	FolderPlus,
 	GitFork,
+	MessageCircle,
 	PanelLeftClose,
 	Pin,
 	Plus,
@@ -27,10 +28,11 @@ import {
 } from "react";
 import { api, basename, relativeTime, tildify } from "../lib/api";
 import { SpinnerIcon } from "./SpinnerIcon";
+import { useDismiss } from "./Pickers";
 import { firstUserMessage } from "../state/chat-model";
 import {
 	activateTab,
-	deleteSession,
+	confirmDeleteSession,
 	exportHtml,
 	openExistingSession,
 	renameSessionByPath,
@@ -112,6 +114,9 @@ const SessionRow = memo(function SessionRow({
 }) {
 	const [renaming, setRenaming] = useState(false);
 	const [value, setValue] = useState(row.title);
+	const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+	const menuRef = useRef<HTMLDivElement>(null);
+	useDismiss(menuRef, !!menu, () => setMenu(null));
 	const tab = row.tab;
 	const attention = (tab?.dialogs.length ?? 0) > 0;
 	const busy = tab?.isStreaming || tab?.isCompacting;
@@ -121,37 +126,10 @@ const SessionRow = memo(function SessionRow({
 		else if (tab) activateTab(tab.tabId);
 	};
 
-	const onContextMenu = async (event: React.MouseEvent) => {
-		event.preventDefault();
-		const path = row.summary?.path;
-		if (!path) return;
-		const action = await api.sessionContextMenu(path, pinned);
-		switch (action) {
-			case "rename":
-				setValue(row.title);
-				setRenaming(true);
-				break;
-			case "pin":
-			case "unpin":
-				await togglePin(path);
-				break;
-			case "reveal":
-				await api.revealPath(path);
-				break;
-			case "copyPath":
-				await api.copyText(path);
-				break;
-			case "exportHtml": {
-				await openExistingSession(path, row.cwd);
-				const opened = tabForSession(path);
-				if (opened) await exportHtml(opened.tabId);
-				break;
-			}
-			case "delete":
-				if (window.confirm(`Move "${row.title}" to the Trash?`))
-					await deleteSession(path);
-				break;
-		}
+	const path = row.summary?.path;
+	const runMenuAction = (fn: () => Promise<void> | void) => {
+		setMenu(null);
+		void fn();
 	};
 
 	if (renaming) {
@@ -179,36 +157,114 @@ const SessionRow = memo(function SessionRow({
 		);
 	}
 
+	const menuLeft = menu
+		? Math.max(8, Math.min(menu.x, window.innerWidth - 236))
+		: 0;
+	const menuTop = menu
+		? Math.max(8, Math.min(menu.y, window.innerHeight - 260))
+		: 0;
+
 	return (
-		<div
-			role="button"
-			tabIndex={0}
-			className={`session-row${active ? " active" : ""}${tab?.unread ? " unread" : ""}${draggable ? " draggable" : ""}${dragging ? " dragging" : ""}${dropBefore ? " drop-before" : ""}${dropAfter ? " drop-after" : ""}`}
-			onClick={open}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					open();
-				}
-			}}
-			onContextMenu={onContextMenu}
-			title={row.title}
-			draggable={draggable}
-			onDragStart={onDragStart}
-			onDragOver={onDragOver}
-			onDrop={onDrop}
-			onDragEnd={onDragEnd}
-		>
-			{busy ? (
-				<SpinnerIcon size={12} title="Working" />
-			) : attention ? (
-				<span className="status-dot attention" title="Waiting for you" />
-			) : tab?.unread ? (
-				<span className="status-dot unread" title="New reply" />
-			) : null}
-			<span className="title">{row.title}</span>
-			<span className="meta">{relativeTime(row.modified)}</span>
-		</div>
+		<>
+			<div
+				role="button"
+				tabIndex={0}
+				className={`session-row${active ? " active" : ""}${tab?.unread ? " unread" : ""}${draggable ? " draggable" : ""}${dragging ? " dragging" : ""}${dropBefore ? " drop-before" : ""}${dropAfter ? " drop-after" : ""}`}
+				onClick={open}
+				onKeyDown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						open();
+					}
+				}}
+				onContextMenu={(event) => {
+					event.preventDefault();
+					if (!path) return;
+					setMenu({ x: event.clientX, y: event.clientY });
+				}}
+				title={row.title}
+				draggable={draggable}
+				onDragStart={onDragStart}
+				onDragOver={onDragOver}
+				onDrop={onDrop}
+				onDragEnd={onDragEnd}
+			>
+				{busy ? (
+					<SpinnerIcon size={12} title="Working" />
+				) : attention ? (
+					<span className="status-dot attention" title="Waiting for you" />
+				) : tab?.unread ? (
+					<span className="status-dot unread" title="New reply" />
+				) : null}
+				<span className="title">{row.title}</span>
+				<span className="meta">{relativeTime(row.modified)}</span>
+			</div>
+			{menu && path && (
+				<div
+					ref={menuRef}
+					className="popover session-context-menu"
+					role="menu"
+					style={{ position: "fixed", top: menuTop, left: menuLeft }}
+					onContextMenu={(event) => event.preventDefault()}
+				>
+					<button
+						type="button"
+						className="menu-item"
+						onClick={() =>
+							runMenuAction(() => {
+								setValue(row.title);
+								setRenaming(true);
+							})
+						}
+					>
+						Rename…
+					</button>
+					<button
+						type="button"
+						className="menu-item"
+						onClick={() => runMenuAction(() => togglePin(path))}
+					>
+						{pinned ? "Unpin" : "Pin to Top"}
+					</button>
+					<div className="menu-separator" />
+					<button
+						type="button"
+						className="menu-item"
+						onClick={() =>
+							runMenuAction(async () => {
+								await openExistingSession(path, row.cwd);
+								const opened = tabForSession(path);
+								if (opened) await exportHtml(opened.tabId);
+							})
+						}
+					>
+						Export as HTML…
+					</button>
+					<button
+						type="button"
+						className="menu-item"
+						onClick={() => runMenuAction(() => api.revealPath(path))}
+					>
+						Reveal Session File in Finder
+					</button>
+					<button
+						type="button"
+						className="menu-item"
+						onClick={() => runMenuAction(() => api.copyText(path))}
+					>
+						Copy Session Path
+					</button>
+					<div className="menu-separator" />
+					<button
+						type="button"
+						className="menu-item danger"
+						onClick={() => runMenuAction(() => confirmDeleteSession(path, row.title))}
+					>
+						Delete
+					</button>
+				</div>
+			)}
+		</>
 	);
 });
 
@@ -281,7 +337,9 @@ function Group({
 							className={`sidebar-section-chevron${collapsed ? "" : " expanded"}`}
 						/>
 					</span>
-					<span className="sidebar-section-header-label">{basename(cwd) || cwd}</span>
+					<span className="sidebar-section-header-label">
+						{basename(cwd) || cwd}
+					</span>
 				</button>
 				<button
 					type="button"
@@ -363,12 +421,14 @@ function Group({
 	);
 }
 
-export function Sidebar() {
+export function Sidebar(_props?: { collapsed?: boolean }) {
 	const settings = useStore((s) => s.settings);
 	const sessions = useStore((s) => s.sessions);
 	const tabs = useStore((s) => s.tabs);
 	const activeTabId = useStore((s) => s.activeTabId);
-	const [workspaceHealth, setWorkspaceHealth] = useState<WorkspaceHealth | null>(null);
+	const [workspaceHealth, setWorkspaceHealth] = useState<WorkspaceHealth | null>(
+		null,
+	);
 	const pinnedPaths = settings.pinnedSessions ?? [];
 	const sidebarSessionOrder = settings.sidebarSessionOrder ?? {};
 	const searchQuery = useStore((s) => s.searchQuery);
@@ -455,7 +515,8 @@ export function Sidebar() {
 	const pinned = useMemo(() => new Set(pinnedPaths), [pinnedPaths]);
 	const repoKinds = useMemo(() => {
 		const kinds = new Map<string, RepoKind>();
-		for (const repo of workspaceHealth?.repos ?? []) kinds.set(repo.path, "supported");
+		for (const repo of workspaceHealth?.repos ?? [])
+			kinds.set(repo.path, "supported");
 		for (const repo of workspaceHealth?.experiments ?? [])
 			if (!kinds.has(repo.path)) kinds.set(repo.path, "experiment");
 		return kinds;
@@ -543,10 +604,7 @@ export function Sidebar() {
 		try {
 			await api.updateSettings({ sidebarSessionOrder: nextSettings });
 		} catch (error) {
-			api.log(
-				"error",
-				`save sidebar session order failed: ${String(error)}`,
-			);
+			api.log("error", `save sidebar session order failed: ${String(error)}`);
 		}
 	}
 
@@ -593,7 +651,12 @@ export function Sidebar() {
 						type="button"
 						className="icon-btn"
 						title="Hide sidebar (⌘\\)"
-						onClick={() => void api.updateSettings({ sidebarCollapsed: true })}
+						onClick={() => {
+							useStore.setState((state) => ({
+								settings: { ...state.settings, sidebarCollapsed: true },
+							}));
+							void api.updateSettings({ sidebarCollapsed: true });
+						}}
 					>
 						<PanelLeftClose size={16} />
 					</button>
@@ -679,6 +742,14 @@ export function Sidebar() {
 				)}
 			</div>
 			<div className="sidebar-footer">
+				<button
+					type="button"
+					className="icon-btn"
+					title="Share feedback"
+					onClick={() => useStore.setState({ feedbackOpen: true })}
+				>
+					<MessageCircle size={16} />
+				</button>
 				<button
 					type="button"
 					className="icon-btn"

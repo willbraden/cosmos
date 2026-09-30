@@ -32,6 +32,8 @@ export interface DesktopSettings {
 	sidebarCollapsed: boolean;
 	/** Enables hidden developer-only tools like UI inspect mode. */
 	developerMode: boolean;
+	/** When enabled, Cosmos can use chat context to pause likely Figma-design prompts until Figma MCP is available. */
+	figmaChatContextGate: boolean;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -49,6 +51,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
 	busySendMode: "steer",
 	sidebarCollapsed: false,
 	developerMode: false,
+	figmaChatContextGate: false,
 };
 
 export interface SessionSummary {
@@ -94,6 +97,15 @@ export interface WorkspaceHealth {
 	/** Other sibling directories under the workspace root, treated as experiments. */
 	experiments: WorkspaceRepoHealth[];
 	readyRepos: number;
+}
+
+export interface WorktreeSupport {
+	available: boolean;
+	repoPath: string;
+	managedRoot: string;
+	gitBinary: boolean;
+	isGitRepo: boolean;
+	reason?: string;
 }
 
 export interface McpServerDefinition {
@@ -262,10 +274,12 @@ export type MenuCommand =
 	| "stop"
 	| "compact"
 	| "export-html"
+	| "trash-session"
 	| "next-session"
 	| "prev-session"
 	| "focus-composer"
-	| "reset-figma";
+	| "reset-figma"
+	| "share-feedback";
 
 /** Surface exposed on `window.pi` by the preload script. */
 export interface DesktopApi {
@@ -302,6 +316,13 @@ export interface DesktopApi {
 	pickFolder(): Promise<string | null>;
 	createExperiment(name: string): Promise<string>;
 	searchFiles(cwd: string, query: string): Promise<FileMatch[]>;
+	getWorktreeSupport(cwd: string): Promise<WorktreeSupport>;
+	previewManagedWorktree(
+		cwd: string,
+		taskGroupId: string,
+		workerId: string,
+	): Promise<{ path: string; branch: string }>;
+	listFiles(cwd: string, dir?: string): Promise<string[]>;
 	/** Absolute path of a file dropped or pasted from Finder ("" if it has none). */
 	getPathForFile(file: File): string;
 	openPath(path: string): Promise<void>;

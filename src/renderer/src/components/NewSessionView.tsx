@@ -299,7 +299,7 @@ export function NewSessionView() {
 		<div className="main">
 			<div
 				className="main-header drag"
-				style={{ paddingLeft: collapsed ? 84 : 16 }}
+				style={{ paddingLeft: collapsed ? 16 : 16 }}
 			/>
 			<div className="empty empty-cosmos">
 				<h1 className="cosmos-wordmark" aria-label="cosmos">
@@ -411,7 +411,10 @@ export function NewSessionView() {
 					</>
 				)}
 				{visibleRecent.length > 0 && (
-					<div className="project-list workspace-recent-list" style={{ width: "100%" }}>
+					<div
+						className="project-list workspace-recent-list"
+						style={{ width: "100%" }}
+					>
 						<div className="workspace-section-label">Recent workspace projects</div>
 						{visibleRecent.map((path) => (
 							<button

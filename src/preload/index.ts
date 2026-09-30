@@ -49,6 +49,10 @@ const api: DesktopApi = {
 	createExperiment: (name) =>
 		ipcRenderer.invoke("workspace:create-experiment", name),
 	searchFiles: (cwd, query) => ipcRenderer.invoke("files:search", cwd, query),
+	getWorktreeSupport: (cwd) => ipcRenderer.invoke("worktrees:support", cwd),
+	previewManagedWorktree: (cwd, taskGroupId, workerId) =>
+		ipcRenderer.invoke("worktrees:preview", cwd, taskGroupId, workerId),
+	listFiles: (cwd, dir) => ipcRenderer.invoke("files:list", cwd, dir),
 	getPathForFile: (file) => {
 		try {
 			return webUtils.getPathForFile(file);

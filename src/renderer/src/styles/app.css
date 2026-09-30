@@ -122,7 +122,14 @@ select {
 }
 
 .sidebar-collapsed .main-header {
-	padding-left: 84px;
+	padding-left: 16px;
+}
+
+.sidebar-show-btn {
+	position: fixed;
+	top: 56px;
+	left: 12px;
+	z-index: 50;
 }
 
 .header-title {
@@ -191,7 +198,11 @@ select {
 	max-width: min(320px, calc(100vw - 16px));
 	padding: 6px 9px;
 	border-radius: 8px;
-	background: color-mix(in srgb, var(--color-foreground-neutral-default-strong) 94%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-foreground-neutral-default-strong) 94%,
+		transparent
+	);
 	color: var(--color-foreground-neutral-inverse-strong);
 	box-shadow: var(--shadow-float);
 	font-size: 12px;
@@ -265,7 +276,12 @@ select {
 	font-weight: var(--typography-label-normal-default-sm-font-weight);
 	line-height: var(--typography-label-normal-default-sm-line-height);
 	white-space: nowrap;
-	max-width: 260px;
+	min-width: 0;
+	max-width: min(260px, 100%);
+}
+
+.chip > svg {
+	flex-shrink: 0;
 }
 
 .chip:hover {
@@ -276,6 +292,14 @@ select {
 .chip span {
 	overflow: hidden;
 	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.dropdown {
+	position: relative;
+	min-width: 0;
+	flex-shrink: 1;
 }
 
 .kbd {
@@ -296,7 +320,12 @@ select {
 	background: linear-gradient(
 		180deg,
 		var(--color-surface-raised) 0%,
-		color-mix(in srgb, var(--color-surface-raised) 76%, var(--color-surface-secondary)) 100%
+		color-mix(
+				in srgb,
+				var(--color-surface-raised) 76%,
+				var(--color-surface-secondary)
+			)
+			100%
 	);
 	border-right: 1px solid var(--color-border-neutral-subtle);
 	display: flex;
@@ -708,7 +737,12 @@ select {
 }
 
 .error-card {
-	border: 1px solid color-mix(in srgb, var(--color-foreground-negative-default-strong) 35%, transparent);
+	border: 1px solid
+		color-mix(
+			in srgb,
+			var(--color-foreground-negative-default-strong) 35%,
+			transparent
+		);
 	background: var(--color-background-negative-default-subtle-idle);
 	color: var(--color-foreground-negative-default-strong);
 	border-radius: var(--border-radius-8);
@@ -1005,8 +1039,20 @@ select {
 	position: relative;
 	isolation: isolate;
 	overflow: hidden;
-	border-color: color-mix(in srgb, var(--color-border-brand-strong, var(--color-border-neutral-subtle)) 45%, var(--color-border-neutral-subtle));
-	background: color-mix(in srgb, var(--color-background-brand-default-subtle-idle, var(--color-background-neutral-default-normal-idle)) 28%, var(--color-background-neutral-default-normal-idle));
+	border-color: color-mix(
+		in srgb,
+		var(--color-border-brand-strong, var(--color-border-neutral-subtle)) 45%,
+		var(--color-border-neutral-subtle)
+	);
+	background: color-mix(
+		in srgb,
+		var(
+				--color-background-brand-default-subtle-idle,
+				var(--color-background-neutral-default-normal-idle)
+			)
+			28%,
+		var(--color-background-neutral-default-normal-idle)
+	);
 }
 
 .assistant-turn-header.is-live::after {
@@ -1095,7 +1141,11 @@ select {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: color-mix(in srgb, var(--color-background-brand-default-strong-idle) 35%, white);
+	background: color-mix(
+		in srgb,
+		var(--color-background-brand-default-strong-idle) 35%,
+		white
+	);
 	animation: blink 1.2s infinite ease-in-out;
 }
 
@@ -1111,7 +1161,10 @@ select {
 	width: var(--spinner-size, 16px);
 	height: var(--spinner-size, 16px);
 	flex-shrink: 0;
-	color: var(--color-foreground-brand-strong, var(--color-foreground-neutral-default-strong));
+	color: var(
+		--color-foreground-brand-strong,
+		var(--color-foreground-neutral-default-strong)
+	);
 }
 
 .custom-spinner-icon .outer,
@@ -1137,7 +1190,10 @@ select {
 }
 
 @keyframes active-spinner-outer {
-	0%, 48%, 88%, 100% {
+	0%,
+	48%,
+	88%,
+	100% {
 		stroke-width: 1px;
 	}
 	68% {
@@ -1146,7 +1202,10 @@ select {
 }
 
 @keyframes active-spinner-middle {
-	0%, 21.33%, 61.33%, 100% {
+	0%,
+	21.33%,
+	61.33%,
+	100% {
 		stroke-width: 1px;
 	}
 	41.33% {
@@ -1155,7 +1214,9 @@ select {
 }
 
 @keyframes active-spinner-inner {
-	0%, 33.33%, 100% {
+	0%,
+	33.33%,
+	100% {
 		stroke-width: 1px;
 	}
 	14.67% {
@@ -1323,7 +1384,8 @@ select {
 
 .composer-wrap {
 	flex-shrink: 0;
-	padding: 0 28px 14px;
+	padding: 0 clamp(12px, 4%, 28px) 14px;
+	min-width: 0;
 }
 
 .composer-wrap.centered {
@@ -1335,6 +1397,7 @@ select {
 	max-width: 780px;
 	margin: 0 auto;
 	position: relative;
+	min-width: 0;
 }
 
 .composer {
@@ -1349,10 +1412,19 @@ select {
 }
 
 .composer:focus-within {
-	border-color: color-mix(in srgb, var(--color-border-brand-strong) 55%, var(--color-border-neutral-normal));
+	border-color: color-mix(
+		in srgb,
+		var(--color-border-brand-strong) 55%,
+		var(--color-border-neutral-normal)
+	);
 	box-shadow:
 		var(--shadow-float),
-		0 0 0 4px color-mix(in srgb, var(--color-background-brand-default-subtle-idle) 58%, transparent);
+		0 0 0 4px
+		color-mix(
+			in srgb,
+			var(--color-background-brand-default-subtle-idle) 58%,
+			transparent
+		);
 }
 
 .composer.drop {
@@ -1384,6 +1456,22 @@ select {
 	align-items: center;
 	gap: 2px;
 	padding: 6px 8px 8px;
+	min-width: 0;
+}
+
+/* Toolbar items shrink (and truncate) instead of spilling past the rounded box. */
+.composer-toolbar > * {
+	min-width: 0;
+}
+
+/* Icons-only toolbar once the composer is too narrow for labels. */
+.composer-inner.compact .chip-label {
+	display: none;
+}
+
+.composer-inner.compact .chip {
+	padding: 0 6px;
+	gap: 3px;
 }
 
 .send-btn {
@@ -1397,6 +1485,7 @@ select {
 	background: var(--color-background-brand-default-strong-idle);
 	color: var(--app-foreground-on-brand-strong);
 	margin-left: 4px;
+	flex-shrink: 0;
 }
 
 .send-btn:hover {
@@ -1466,6 +1555,9 @@ select {
 
 .composer-hint > span {
 	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .composer-status {
@@ -1523,7 +1615,8 @@ select {
 	border-radius: 12px;
 	box-shadow: var(--shadow-float);
 	padding: 5px;
-	min-width: 220px;
+	min-width: min(220px, calc(100vw - 24px));
+	max-width: calc(100vw - 24px);
 	max-height: 360px;
 	overflow-y: auto;
 }
@@ -1558,6 +1651,24 @@ select {
 .menu-item.selected,
 .menu-item:hover {
 	background: var(--color-background-neutral-default-subtle-hover);
+}
+
+.menu-item.danger {
+	color: var(--color-foreground-negative-default-strong);
+}
+
+.menu-item.danger:hover {
+	background: color-mix(
+		in srgb,
+		var(--color-background-negative-default-subtle-idle) 72%,
+		var(--color-background-neutral-default-subtle-hover)
+	);
+}
+
+.menu-separator {
+	height: 1px;
+	margin: 5px 4px;
+	background: var(--color-border-neutral-subtle);
 }
 
 .menu-item .desc {
@@ -1612,7 +1723,11 @@ select {
 }
 
 .dialog-card.permission {
-	border-color: color-mix(in srgb, var(--color-foreground-warning-strong) 50%, var(--color-border-neutral-normal));
+	border-color: color-mix(
+		in srgb,
+		var(--color-foreground-warning-strong) 50%,
+		var(--color-border-neutral-normal)
+	);
 }
 
 .dialog-card-header {
@@ -1718,10 +1833,16 @@ select {
 	position: fixed;
 	border: 2px solid var(--color-border-brand-strong);
 	border-radius: 10px;
-	background: color-mix(in srgb, var(--color-background-brand-default-strong-idle) 14%, transparent);
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-border-brand-strong) 35%, transparent),
+	background: color-mix(
+		in srgb,
+		var(--color-background-brand-default-strong-idle) 14%,
+		transparent
+	);
+	box-shadow:
+		0 0 0 1px
+		color-mix(in srgb, var(--color-border-brand-strong) 35%, transparent),
 		0 16px 32px rgb(0 0 0 / 0.18);
-	}
+}
 
 .inspect-pill {
 	position: absolute;
@@ -1749,13 +1870,78 @@ select {
 	gap: 8px;
 	padding: 8px 12px;
 	border-radius: 999px;
-	border: 1px solid color-mix(in srgb, var(--color-background-brand-default-strong-idle) 25%, var(--color-border-neutral-subtle));
-	background: color-mix(in srgb, var(--color-background-neutral-default-normal-idle) 92%, transparent);
+	border: 1px solid
+		color-mix(
+			in srgb,
+			var(--color-background-brand-default-strong-idle) 25%,
+			var(--color-border-neutral-subtle)
+		);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-normal-idle) 92%,
+		transparent
+	);
 	box-shadow: var(--shadow-lift);
 	font-size: 12px;
 	font-weight: 600;
 	z-index: 141;
 	pointer-events: none;
+}
+
+.feedback-modal {
+	width: min(720px, calc(100vw - 40px));
+}
+
+.feedback-modal-header {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	align-items: flex-start;
+	padding: 18px 18px 0;
+}
+
+.feedback-modal-header h2 {
+	margin: 4px 0 6px;
+	font-size: 20px;
+}
+
+.feedback-modal-header p {
+	margin: 0;
+	color: var(--color-foreground-neutral-default-normal);
+	line-height: 1.45;
+}
+
+.feedback-modal-body {
+	display: grid;
+	gap: 14px;
+	padding: 18px;
+}
+
+.feedback-modal-body textarea {
+	width: 100%;
+	min-height: 240px;
+	resize: vertical;
+	border: 1px solid var(--color-border-brand-strong);
+	border-radius: 14px;
+	padding: 16px 18px;
+	background: var(--color-background-neutral-default-normal-idle);
+	line-height: 1.45;
+	font-size: 17px;
+}
+
+.feedback-modal-body textarea::placeholder {
+	color: var(--color-foreground-neutral-default-subtle);
+}
+
+.feedback-modal-note {
+	font-size: 12.5px;
+	color: var(--color-foreground-neutral-default-subtle);
+}
+
+.feedback-modal-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
 }
 
 .inspect-modal {
@@ -1869,8 +2055,17 @@ select {
 	min-width: 86px;
 	padding: 10px 12px;
 	border-radius: 12px;
-	border: 1px solid color-mix(in srgb, var(--color-background-brand-default-strong-idle) 22%, var(--color-border-neutral-subtle));
-	background: color-mix(in srgb, var(--color-background-brand-default-strong-idle) 10%, var(--color-background-neutral-default-normal-idle));
+	border: 1px solid
+		color-mix(
+			in srgb,
+			var(--color-background-brand-default-strong-idle) 22%,
+			var(--color-border-neutral-subtle)
+		);
+	background: color-mix(
+		in srgb,
+		var(--color-background-brand-default-strong-idle) 10%,
+		var(--color-background-neutral-default-normal-idle)
+	);
 	display: grid;
 	gap: 2px;
 	text-align: left;
@@ -1897,7 +2092,11 @@ select {
 .experiments-list-card {
 	border: 1px solid var(--color-border-neutral-subtle);
 	border-radius: 14px;
-	background: color-mix(in srgb, var(--color-background-neutral-default-normal-idle) 92%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-normal-idle) 92%,
+		transparent
+	);
 	padding: 16px;
 	display: grid;
 	gap: 12px;
@@ -2377,7 +2576,12 @@ select {
 	padding: 8px 10px;
 	border-radius: 8px;
 	background: var(--color-background-warning-default-subtle-idle);
-	border: 1px solid color-mix(in srgb, var(--color-foreground-warning-strong) 25%, var(--color-border-neutral-subtle));
+	border: 1px solid
+		color-mix(
+			in srgb,
+			var(--color-foreground-warning-strong) 25%,
+			var(--color-border-neutral-subtle)
+		);
 	font-size: 12px;
 	line-height: 1.45;
 	color: var(--color-foreground-neutral-default-normal);
@@ -2388,7 +2592,11 @@ select {
 
 .mcp-oauth-note.connected {
 	background: var(--color-background-positive-default-subtle-idle);
-	border-color: color-mix(in srgb, var(--color-foreground-positive-strong) 25%, var(--color-border-neutral-subtle));
+	border-color: color-mix(
+		in srgb,
+		var(--color-foreground-positive-strong) 25%,
+		var(--color-border-neutral-subtle)
+	);
 }
 
 .mcp-oauth-note .selectable {
@@ -2507,7 +2715,11 @@ select {
 	border: 1px solid var(--color-border-neutral-subtle);
 	border-radius: 16px;
 	padding: 16px;
-	background: color-mix(in srgb, var(--color-background-neutral-default-normal-idle) 92%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-normal-idle) 92%,
+		transparent
+	);
 	display: grid;
 	gap: 10px;
 	text-align: left;
@@ -2563,7 +2775,11 @@ select {
 	border: 1px solid var(--color-border-neutral-subtle);
 	border-radius: 16px;
 	padding: 14px;
-	background: color-mix(in srgb, var(--color-background-neutral-default-normal-idle) 94%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-normal-idle) 94%,
+		transparent
+	);
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
@@ -2613,39 +2829,81 @@ select {
 }
 
 .repo-card-kind {
-	border: 1px solid color-mix(in srgb, var(--color-border-neutral-subtle) 88%, transparent);
-	background: color-mix(in srgb, var(--color-background-neutral-default-subtle-idle) 86%, transparent);
+	border: 1px solid
+		color-mix(in srgb, var(--color-border-neutral-subtle) 88%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-subtle-idle) 86%,
+		transparent
+	);
 	color: var(--color-foreground-neutral-default-normal);
 }
 
 .repo-card-kind-experiment {
-	background: color-mix(in srgb, var(--color-background-brand-default-subtle-idle) 68%, transparent);
-	border-color: color-mix(in srgb, var(--color-border-brand-strong) 45%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-brand-default-subtle-idle) 68%,
+		transparent
+	);
+	border-color: color-mix(
+		in srgb,
+		var(--color-border-brand-strong) 45%,
+		transparent
+	);
 	color: var(--color-foreground-brand-strong);
 }
 
 .repo-card-status {
-	border: 1px solid color-mix(in srgb, var(--color-border-neutral-subtle) 92%, transparent);
-	background: color-mix(in srgb, var(--color-background-neutral-default-subtle-idle) 90%, transparent);
+	border: 1px solid
+		color-mix(in srgb, var(--color-border-neutral-subtle) 92%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-subtle-idle) 90%,
+		transparent
+	);
 	color: var(--color-foreground-neutral-default-normal);
 	flex-shrink: 0;
 }
 
 .repo-card-status-ready {
-	background: color-mix(in srgb, var(--color-background-positive-default-subtle-idle) 80%, transparent);
-	border-color: color-mix(in srgb, var(--color-foreground-positive-strong) 32%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-positive-default-subtle-idle) 80%,
+		transparent
+	);
+	border-color: color-mix(
+		in srgb,
+		var(--color-foreground-positive-strong) 32%,
+		transparent
+	);
 	color: var(--color-foreground-positive-strong);
 }
 
 .repo-card-status-needs-git {
-	background: color-mix(in srgb, var(--color-background-warning-default-subtle-idle) 80%, transparent);
-	border-color: color-mix(in srgb, var(--color-foreground-warning-strong) 34%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-warning-default-subtle-idle) 80%,
+		transparent
+	);
+	border-color: color-mix(
+		in srgb,
+		var(--color-foreground-warning-strong) 34%,
+		transparent
+	);
 	color: var(--color-foreground-warning-strong);
 }
 
 .repo-card-status-missing {
-	background: color-mix(in srgb, var(--color-background-negative-default-subtle-idle) 80%, transparent);
-	border-color: color-mix(in srgb, var(--color-border-negative-default) 34%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-negative-default-subtle-idle) 80%,
+		transparent
+	);
+	border-color: color-mix(
+		in srgb,
+		var(--color-border-negative-default) 34%,
+		transparent
+	);
 	color: var(--color-foreground-negative-default-strong);
 }
 
@@ -2674,7 +2932,7 @@ select {
 }
 
 .empty-chat-welcome.minimal h1 {
-	font-size: clamp(28px, 4vw, 36px);
+	font-size: clamp(18.67px, 2.67vw, 24px);
 	font-weight: 500;
 	letter-spacing: -0.03em;
 	color: var(--color-foreground-neutral-default-strong);
@@ -2684,7 +2942,11 @@ select {
 .empty-chat-welcome .cosmos-wordmark-hero {
 	font-size: clamp(52px, 9vw, 84px);
 	letter-spacing: -0.085em;
-	color: color-mix(in srgb, var(--color-surface-default) 95%, var(--color-foreground-neutral-default-strong) 5%);
+	color: color-mix(
+		in srgb,
+		var(--color-surface-default) 95%,
+		var(--color-foreground-neutral-default-strong) 5%
+	);
 }
 
 .empty-chat-actions {
@@ -2698,9 +2960,18 @@ select {
 	height: 32px;
 	padding: 0 14px;
 	border-radius: 999px;
-	border: 1px solid color-mix(in srgb, var(--color-border-neutral-subtle) 52%, transparent);
-	background: color-mix(in srgb, var(--color-background-neutral-default-normal-idle) 22%, transparent);
-	color: color-mix(in srgb, var(--color-foreground-neutral-default-strong) 62%, var(--color-surface-default) 38%);
+	border: 1px solid
+		color-mix(in srgb, var(--color-border-neutral-subtle) 52%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-normal-idle) 22%,
+		transparent
+	);
+	color: color-mix(
+		in srgb,
+		var(--color-foreground-neutral-default-strong) 62%,
+		var(--color-surface-default) 38%
+	);
 	font-size: 12.5px;
 	font-weight: 500;
 	letter-spacing: 0.01em;
@@ -2713,9 +2984,21 @@ select {
 }
 
 .empty-chat-action:hover {
-	background: color-mix(in srgb, var(--color-background-neutral-default-normal-idle) 34%, transparent);
-	border-color: color-mix(in srgb, var(--color-border-neutral-normal) 66%, transparent);
-	color: color-mix(in srgb, var(--color-foreground-neutral-default-strong) 78%, var(--color-surface-default) 22%);
+	background: color-mix(
+		in srgb,
+		var(--color-background-neutral-default-normal-idle) 34%,
+		transparent
+	);
+	border-color: color-mix(
+		in srgb,
+		var(--color-border-neutral-normal) 66%,
+		transparent
+	);
+	color: color-mix(
+		in srgb,
+		var(--color-foreground-neutral-default-strong) 78%,
+		var(--color-surface-default) 22%
+	);
 	transform: translateY(-1px);
 }
 
@@ -2753,7 +3036,11 @@ select {
 	place-items: center;
 	overflow: visible;
 	pointer-events: auto;
-	color: color-mix(in srgb, var(--color-foreground-neutral-default-strong) 80%, transparent);
+	color: color-mix(
+		in srgb,
+		var(--color-foreground-neutral-default-strong) 80%,
+		transparent
+	);
 }
 
 .empty-orbit::before {
@@ -2981,7 +3268,12 @@ select {
 .welcome-card {
 	max-width: 520px;
 	margin-top: 8px;
-	border: 1px solid color-mix(in srgb, var(--color-border-brand-strong) 18%, var(--color-border-neutral-subtle));
+	border: 1px solid
+		color-mix(
+			in srgb,
+			var(--color-border-brand-strong) 18%,
+			var(--color-border-neutral-subtle)
+		);
 	background: color-mix(in srgb, var(--color-surface-primary) 90%, transparent);
 	backdrop-filter: blur(14px);
 	border-radius: 18px;
@@ -3018,7 +3310,11 @@ select {
 	font-weight: 600;
 	font-size: 13.5px;
 	border-bottom: 1px solid var(--color-border-neutral-subtle);
-	background: color-mix(in srgb, var(--color-surface-secondary) 86%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--color-surface-secondary) 86%,
+		transparent
+	);
 	backdrop-filter: blur(14px);
 	flex-shrink: 0;
 }

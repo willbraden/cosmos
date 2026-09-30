@@ -47,6 +47,8 @@ export function sanitizeSettingsPatch(
 		out.sidebarCollapsed = raw.sidebarCollapsed;
 	if (typeof raw.developerMode === "boolean")
 		out.developerMode = raw.developerMode;
+	if (typeof raw.figmaChatContextGate === "boolean")
+		out.figmaChatContextGate = raw.figmaChatContextGate;
 	if (raw.busySendMode === "steer" || raw.busySendMode === "followUp")
 		out.busySendMode = raw.busySendMode;
 	if (
