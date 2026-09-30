@@ -257,6 +257,14 @@ try {
 		await waitFor(`Math.round(document.querySelector('.sidebar').getBoundingClientRect().width) === 600`, "sidebar clamped to max");
 		await dragResizer(40);
 		await waitFor(`Math.round(document.querySelector('.sidebar').getBoundingClientRect().width) === 275`, "sidebar clamped to min");
+		// The handle overhangs the sidebar edge, so it must stay above the main
+		// header, which paints a blurred backdrop over the first 48px.
+		const topmost = await evaluate(`(() => {
+			const r = document.querySelector('.sidebar').getBoundingClientRect();
+			return [6, 24, 44, 120].map((y) => document.elementFromPoint(r.right + 1, y)?.className ?? 'none').join('|');
+		})()`);
+		if (topmost.split("|").some((c) => !String(c).includes("sidebar-resizer")))
+			throw new Error(`resizer is occluded along its top edge: ${topmost}`);
 	});
 
 	await step("collapsed sidebar shows an icon rail", async () => {

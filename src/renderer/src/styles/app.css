@@ -307,6 +307,7 @@ select {
 	width: 275px;
 	flex-shrink: 0;
 	position: relative;
+	z-index: 20;
 	background: linear-gradient(
 		180deg,
 		var(--color-surface-raised) 0%,
