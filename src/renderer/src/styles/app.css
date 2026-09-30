@@ -1565,32 +1565,6 @@ select {
 	padding: 0;
 }
 
-.composer-hint {
-	max-width: 780px;
-	margin: 6px auto 0;
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	color: var(--color-foreground-neutral-default-subtle);
-	font-size: 11.5px;
-	padding: 0 6px;
-	min-height: 17px;
-	min-width: 0;
-}
-
-.composer-hint > span {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.composer-status {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
 .queue {
 	max-width: 780px;
 	margin: 0 auto 8px;

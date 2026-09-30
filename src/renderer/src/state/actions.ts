@@ -10,6 +10,7 @@ import {
 	PERMISSION_OPTIONS,
 	PERMISSION_PROMPT_MARKER,
 	type PermissionPromptPayload,
+	permissionNeedsApproval,
 	type SessionEntry,
 	type SessionState,
 	type SessionStats,
@@ -1181,10 +1182,25 @@ export async function setPermissionMode(
 	try {
 		await cmd(tabId, { type: "desktop_set_permission_mode", mode });
 		updateTab(tabId, () => ({ permissionMode: mode }));
+		releaseDialogsAllowedBy(tabId, mode);
 		// New sessions start in the most recently chosen mode.
 		await api.updateSettings({ permissionMode: mode });
 	} catch (error) {
 		toast("error", errorMessage(error));
+	}
+}
+
+/**
+ * The new mode governs future tool calls, but a prompt already on screen is still parked on
+ * its own `ui.select`. Answer the ones the new mode would not have asked about so switching
+ * to Auto mid-turn actually stops the asking.
+ */
+function releaseDialogsAllowedBy(tabId: string, mode: PermissionMode): void {
+	for (const dialog of getTab(tabId)?.dialogs ?? []) {
+		const permission =
+			"title" in dialog ? parsePermissionPrompt(dialog.title) : null;
+		if (permission && !permissionNeedsApproval(mode, permission.toolName))
+			void answerPermission(tabId, dialog.id, "allow");
 	}
 }
 

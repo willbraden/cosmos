@@ -1,6 +1,7 @@
-import { mkdirSync, unlinkSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
 	LiveSessionState,
 	OpenSessionRequest,
@@ -11,12 +12,29 @@ import type {
 import { encodeJsonl, JsonlDecoder } from "./pi/jsonl";
 import { SessionHost } from "./pi/session-host";
 import { runtimeLog as log } from "./runtime-log";
-import { type SupervisorConfig, type SupervisorMessage, type SupervisorRequest } from "./session-supervisor-protocol";
+import {
+	type SupervisorConfig,
+	type SupervisorIdentity,
+	type SupervisorMessage,
+	type SupervisorRequest,
+	supervisorPidFilePath,
+} from "./session-supervisor-protocol";
 import { resolveShellEnv } from "./shell-env";
+import { supervisorBuildId } from "./supervisor-identity";
 
 const socketPath = process.argv[2];
 if (!socketPath) throw new Error("Session supervisor requires a socket path argument");
 
+const pidFilePath = supervisorPidFilePath(socketPath);
+const entryPath = fileURLToPath(import.meta.url);
+const identity: SupervisorIdentity = {
+	buildId: supervisorBuildId(entryPath),
+	pid: process.pid,
+	entryPath,
+	startedAt: Date.now(),
+};
+
+const SHUTDOWN_GRACE_MS = 50;
 const clients = new Set<net.Socket>();
 let shuttingDown = false;
 let runtime: SupervisorConfig = {
@@ -71,7 +89,12 @@ try {
 	unlinkSync(socketPath);
 } catch {}
 server.listen(socketPath, () => {
-	log.info(`Session supervisor listening on ${socketPath}`);
+	try {
+		writeFileSync(pidFilePath, String(process.pid));
+	} catch (error) {
+		log.warn("Could not write the session supervisor pid file", error);
+	}
+	log.info(`Session supervisor ${identity.buildId} (pid ${process.pid}) listening on ${socketPath}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -79,9 +102,6 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 		void shutdown(0);
 	});
 }
-process.on("disconnect", () => {
-	if (clients.size === 0) void shutdown(0);
-});
 
 async function handleMessage(socket: net.Socket, message: SupervisorMessage): Promise<void> {
 	if (!message || typeof message !== "object" || message.type !== "request") return;
@@ -103,6 +123,12 @@ async function handleMessage(socket: net.Socket, message: SupervisorMessage): Pr
 
 async function routeRequest(request: SupervisorRequest): Promise<unknown> {
 	switch (request.payload.method) {
+		case "hello":
+			return identity;
+		case "shutdown":
+			// Answer first; the reply is what tells the client the socket is about to close.
+			setTimeout(() => void shutdown(0), SHUTDOWN_GRACE_MS);
+			return null;
 		case "configure":
 			runtime = { ...request.payload.config };
 			applyRuntimeEnv(runtime);
@@ -167,6 +193,9 @@ async function shutdown(code: number): Promise<void> {
 	}
 	try {
 		unlinkSync(socketPath);
+	} catch {}
+	try {
+		unlinkSync(pidFilePath);
 	} catch {}
 	process.exit(code);
 }

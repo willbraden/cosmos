@@ -419,6 +419,10 @@ async function start(): Promise<void> {
 			},
 			exit: (exit) => send("session:exit", exit),
 		},
+		log: {
+			info: (message) => log.info(message),
+			warn: (message) => log.warn(message),
+		},
 	});
 	await host.start(buildSupervisorConfig(settings.get(), workspaceRoot));
 

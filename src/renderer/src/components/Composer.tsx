@@ -298,8 +298,6 @@ export function Composer({
 	const below = Object.entries(tab.widgets).filter(
 		([, w]) => w.placement === "belowEditor",
 	);
-	const statuses = Object.values(tab.statuses);
-	const showHintRow = busy || statuses.length > 0;
 
 	return (
 		<div className={`composer-wrap${centered ? " centered" : ""}`}>
@@ -460,32 +458,6 @@ export function Composer({
 					</div>
 				</div>
 			</div>
-			{showHintRow && (
-				<div className="composer-hint">
-					{busy && (
-						<>
-							<span>
-								<span className="kbd">esc</span> to stop
-								{!compact && (
-									<>
-										{" · "}
-										<span className="kbd">⌥ enter</span> to{" "}
-										{busySendMode === "steer"
-											? "send after it finishes"
-											: "steer now"}
-									</>
-								)}
-							</span>
-							{statuses.length > 0 && <span className="spacer" />}
-						</>
-					)}
-					{statuses.map((status) => (
-						<span key={status} className="composer-status" title={status}>
-							{status}
-						</span>
-					))}
-				</div>
-			)}
 			{below.map(([key, widget]) => (
 				<div key={key} className="widget" style={{ marginTop: 8 }}>
 					{widget.lines.join("\n")}
