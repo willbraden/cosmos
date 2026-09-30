@@ -25,6 +25,7 @@ import {
 	classifyRoot,
 	createCommandRunner,
 	discoverTeams,
+	effectivePrecedence,
 	isRateLimited,
 	parseRootNames,
 	parseSearchHits,
@@ -1622,5 +1623,82 @@ describe("pointing the glayvin CLI at the right home", () => {
 			5000,
 		);
 		expect(result.stdout).toBe("unset");
+	});
+});
+
+describe("team precedence", () => {
+	const teams = [
+		{ name: "first", path: "/ws/first" },
+		{ name: "second", path: "/ws/second" },
+		{ name: "third", path: "/ws/third" },
+	];
+	const ctx = (over = {}) => ({
+		disabled: [],
+		registered: teams.map((t) => t.name),
+		exists: () => true,
+		...over,
+	});
+
+	it("ranks in registration order, not alphabetically", () => {
+		expect([...effectivePrecedence(teams, ctx()).entries()]).toEqual([
+			["first", 1],
+			["second", 2],
+			["third", 3],
+		]);
+	});
+
+	// readEnabledTeamDirs drops these before the resolver ever sees them.
+	it("gives a disabled team no slot and closes the gap behind it", () => {
+		const ranks = effectivePrecedence(teams, ctx({ disabled: ["first"] }));
+		expect(ranks.get("first")).toBeUndefined();
+		expect(ranks.get("second")).toBe(1);
+		expect(ranks.get("third")).toBe(2);
+	});
+
+	it("gives a team whose folder is gone no slot either", () => {
+		const ranks = effectivePrecedence(
+			teams,
+			ctx({ exists: (p: string) => p !== "/ws/second" }),
+		);
+		expect(ranks.get("first")).toBe(1);
+		expect(ranks.get("second")).toBeUndefined();
+		expect(ranks.get("third")).toBe(2);
+	});
+
+	it("carries the rank onto an active membership", () => {
+		const membership = resolveMembership("second", "/ws/second", teams, ctx());
+		expect(membership).toMatchObject({ state: "active", precedence: 2 });
+	});
+
+	it("leaves a disabled team unranked, since it is not in the order at all", () => {
+		const membership = resolveMembership(
+			"second",
+			"/ws/second",
+			teams,
+			ctx({ disabled: ["second"] }),
+		);
+		expect(membership?.state).toBe("disabled");
+		expect(membership?.precedence).toBeUndefined();
+	});
+
+	it("leaves a relative-path team unranked, its position depending on cwd", () => {
+		const membership = resolveMembership("ghost", "/ws/ghost", teams, {
+			disabled: [],
+			registered: ["ghost"],
+			exists: () => true,
+		});
+		expect(membership).toMatchObject({ state: "unresolved" });
+		expect(membership?.precedence).toBeUndefined();
+	});
+
+	it("a newly appended team outranks every existing one", () => {
+		const after = [...teams, { name: "joined", path: "/ws/joined" }];
+		const ranks = effectivePrecedence(after, {
+			disabled: [],
+			registered: after.map((t) => t.name),
+			exists: () => true,
+		});
+		expect(ranks.get("joined")).toBe(4);
+		expect(Math.max(...ranks.values())).toBe(ranks.get("joined"));
 	});
 });

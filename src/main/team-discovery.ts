@@ -355,6 +355,25 @@ export interface MembershipContext {
 }
 
 /**
+ * Rank of each team Glayvin actually applies, in glayvin.json order. Disabled and
+ * missing teams are filtered out by `readEnabledTeamDirs`, so they occupy no slot
+ * and shift nothing below them.
+ */
+export function effectivePrecedence(
+	teams: readonly GlayvinTeam[],
+	context: MembershipContext,
+): Map<string, number> {
+	const exists = context.exists ?? existsSync;
+	const ranks = new Map<string, number>();
+	let rank = 0;
+	for (const team of teams) {
+		if (context.disabled.includes(team.name) || !exists(team.path)) continue;
+		ranks.set(team.name, ++rank);
+	}
+	return ranks;
+}
+
+/**
  * Which of the resolver's four conditions a registered team satisfies. Matching is
  * by name first because that is Glayvin's key (`manage teams add <name> <path>`,
  * and disabled.json keys on it too); path is the fallback that catches a team
@@ -365,6 +384,7 @@ export function resolveMembership(
 	localPath: string,
 	teams: readonly GlayvinTeam[],
 	context: MembershipContext,
+	precedence?: ReadonlyMap<string, number>,
 ): TeamMembership | undefined {
 	const exists = context.exists ?? existsSync;
 	const entry =
@@ -385,6 +405,9 @@ export function resolveMembership(
 		path: entry.path,
 		state: disabled ? "disabled" : exists(entry.path) ? "active" : "missing",
 		elsewhere: entry.path !== localPath,
+		precedence: (precedence ?? effectivePrecedence(teams, context)).get(
+			entry.name,
+		),
 	};
 }
 
@@ -396,6 +419,7 @@ function decorate(
 	teams: readonly GlayvinTeam[],
 	membershipContext: MembershipContext,
 ): DiscoveredTeam[] {
+	const precedence = effectivePrecedence(teams, membershipContext);
 	return candidates.map((candidate) => {
 		const localPath = join(workspaceRootPath, candidate.repo);
 		const cloned = existsSync(localPath);
@@ -409,6 +433,7 @@ function decorate(
 				localPath,
 				teams,
 				membershipContext,
+				precedence,
 			),
 			clonedPath: cloned ? localPath : undefined,
 		};

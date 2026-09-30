@@ -215,6 +215,11 @@ export interface TeamMembership {
 	state: TeamMembershipState;
 	/** True when the registered path is not where this pane would clone the repo. */
 	elsewhere: boolean;
+	/**
+	 * 1-based position among the teams Glayvin applies. Later teams override earlier
+	 * ones, so a higher number wins. Only set for `active` — the rest occupy no slot.
+	 */
+	precedence?: number;
 }
 
 /** A team-config repo found in the org, with everything needed to judge and join it. */

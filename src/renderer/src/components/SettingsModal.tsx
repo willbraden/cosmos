@@ -1535,7 +1535,7 @@ function MembershipNote({ membership }: { membership: TeamMembership }) {
 			? "Registered but switched off, so none of its config is being applied."
 			: membership.state === "missing"
 				? `Registered at ${membership.path}, which no longer exists. Glayvin skips it.`
-				: "Registered with a relative path, which only resolves inside the repo it was added from. Re-add it with an absolute path.";
+				: "Registered with a relative path, which Glayvin only resolves from the directory it runs in. The CLI always writes absolute paths, so this was hand-edited — re-add it to fix it.";
 	const fix =
 		membership.state === "disabled"
 			? `glayvin manage teams enable ${membership.name}`
@@ -1579,6 +1579,14 @@ function TeamCard({
 							{state === "active" && (
 								<span className="badge">
 									<CircleCheck size={11} /> Joined
+								</span>
+							)}
+							{membership?.precedence !== undefined && (
+								<span
+									className="mcp-badge neutral"
+									title="Where this team sits in Glayvin's resolution order. Higher wins."
+								>
+									#{membership.precedence}
 								</span>
 							)}
 							{state === "disabled" && (
@@ -1713,8 +1721,16 @@ function Teams() {
 		setJoining(repo);
 		setProgress("");
 		try {
-			setDiscovery(await api.joinTeam(repo));
-			toast("info", `Joined ${repo}.`);
+			const next = await api.joinTeam(repo);
+			setDiscovery(next);
+			const rank = next.teams.find((team) => team.repo === repo)?.membership
+				?.precedence;
+			toast(
+				"info",
+				rank && rank > 1
+					? `Joined ${repo}. It now takes precedence over your other ${rank - 1} team${rank > 2 ? "s" : ""}.`
+					: `Joined ${repo}.`,
+			);
 			// The new layer may publish a repo list, so let Home pick it up.
 			useStore.setState((s) => ({ workspaceRevision: s.workspaceRevision + 1 }));
 		} catch (error) {
@@ -1742,7 +1758,12 @@ function Teams() {
 
 	const all = discovery?.teams ?? [];
 	// Only an active team is actually being applied, so nothing else belongs beside it.
-	const joined = all.filter((team) => team.membership?.state === "active");
+	const joined = all
+		.filter((team) => team.membership?.state === "active")
+		.sort(
+			(a, b) =>
+				(a.membership?.precedence ?? 0) - (b.membership?.precedence ?? 0),
+		);
 	const needsAttention = all.filter(
 		(team) => team.membership && team.membership.state !== "active",
 	);
@@ -1818,6 +1839,11 @@ function Teams() {
 					{joined.length > 0 && (
 						<>
 							<h4 style={{ marginTop: 18 }}>Your teams</h4>
+							<div className="muted small-text" style={{ marginBottom: 8 }}>
+								Listed in the order Glayvin applies them. Where two teams define the
+								same pack or profile, the one further down wins — and if it does not
+								declare an override, Glayvin reports a conflict instead of guessing.
+							</div>
 							<div className="mcp-list">
 								{joined.map((team) => (
 									<TeamCard key={team.repo} {...cardProps(team)} />
