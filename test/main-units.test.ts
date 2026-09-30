@@ -480,6 +480,8 @@ describe("managed agent marker ledger", () => {
 });
 
 describe("glayvin profile overview", () => {
+	const noResolver = async () => undefined;
+
 	function setup() {
 		const root = mkdtempSync(join(tmpdir(), "cosmos-glayvin-profile-"));
 		const glayvinHome = join(root, ".glayvin");
@@ -492,16 +494,40 @@ describe("glayvin profile overview", () => {
 		return { root, glayvinHome, write };
 	}
 
-	it("reports unavailable without a glayvin home", () => {
-		const overview = getGlayvinProfileOverview(undefined);
+	/** A home with the `default` profile resolving to core + the context pack core includes. */
+	function setupDefaultProfile() {
+		const fixture = setup();
+		const { glayvinHome, write } = fixture;
+		write(join(glayvinHome, "config", "profiles", "default.json"), {
+			id: "default",
+			packs: ["core"],
+		});
+		write(join(glayvinHome, "config", "packs", "core.json"), {
+			id: "core",
+			description: "Core runtime",
+			includes: ["context"],
+		});
+		write(join(glayvinHome, "config", "packs", "context.json"), {
+			id: "context",
+		});
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "default",
+			packs: ["core", "context"],
+			packages: [{ name: "pi-lens", version: "4.0.0", owner: "core" }],
+		});
+		return fixture;
+	}
+
+	it("reports unavailable without a glayvin home", async () => {
+		const overview = await getGlayvinProfileOverview(undefined, noResolver);
 		expect(overview.available).toBe(false);
 		expect(overview.packs).toEqual([]);
 		expect(overview.notes.length).toBeGreaterThan(0);
 	});
 
-	it("reports unavailable when the profile has not been resolved", () => {
+	it("reports unavailable when the profile has not been resolved", async () => {
 		const { glayvinHome } = setup();
-		const overview = getGlayvinProfileOverview(glayvinHome);
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
 		expect(overview.available).toBe(false);
 		expect(overview.resolvedPath).toBe(
 			join(glayvinHome, ".local", "resolved.json"),
@@ -509,81 +535,71 @@ describe("glayvin profile overview", () => {
 		expect(overview.notes.join(" ")).toContain("has not resolved a profile");
 	});
 
-	it("degrades instead of throwing on malformed resolved.json", () => {
+	it("degrades instead of throwing on malformed resolved.json", async () => {
 		const { glayvinHome } = setup();
 		writeFileSync(join(glayvinHome, ".local", "resolved.json"), "{ not json");
-		const overview = getGlayvinProfileOverview(glayvinHome);
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
 		expect(overview.available).toBe(false);
 		expect(overview.notes.join(" ")).toContain("Could not parse");
 	});
 
-	it("attributes packs to their layer and reports profile packages", () => {
-		const { root, glayvinHome, write } = setup();
-		const team = join(root, "team-config");
-		write(join(glayvinHome, ".local", "glayvin.json"), {
-			teams: [{ name: "cosmos-ai", path: team }],
-		});
-		write(join(glayvinHome, "config", "packs", "core.json"), {
-			id: "core",
-			description: "Core runtime",
-			commands: ["launch", "setup"],
-		});
-		write(join(team, "packs", "payments.json"), {
-			id: "payments",
-			description: "Payments workflow",
-		});
-		write(join(glayvinHome, ".local", "packs", "scratch.json"), {
-			id: "scratch",
-		});
-		write(join(glayvinHome, ".local", "resolved.json"), {
-			profile: "default",
-			packs: ["core", "payments", "scratch", "ghost"],
-			commands: [
-				{ id: "launch", owner: "core" },
-				{ id: "setup", owner: "core" },
-				{ id: "serve", owner: "payments" },
-			],
-			extensions: [{ path: "/x/a.ts", source: "core" }],
-			skills: [{ path: "/x/skill", owner: "payments" }],
-			hooks: [{ id: "h1", owner: "core" }],
-			packages: [
-				{ name: "pi-lens", version: "4.0.0", owner: "core" },
-				{
-					name: "@gotgenes/pi-permission-system",
-					version: "24.0.0",
-					owner: "core",
-				},
-			],
-		});
+	it("lists every pack the resolver knows about, not just the active ones", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, async (_home, args) =>
+			args[0] === "packs"
+				? {
+						packs: [
+							{
+								id: "core",
+								source: "built-in",
+								status: "effective",
+								via: "profile",
+								description: "Core runtime",
+							},
+							{
+								id: "context",
+								source: "built-in",
+								status: "effective",
+								via: "includes",
+							},
+							{ id: "vision", source: "built-in", status: "available" },
+							{ id: "noisy", source: "built-in", status: "disabled" },
+						],
+					}
+				: {
+						profiles: [
+							{
+								id: "default",
+								source: "built-in",
+								active: true,
+								description: "Default profile",
+							},
+							{ id: "minimal", source: "built-in", active: false },
+						],
+					},
+		);
 
-		const overview = getGlayvinProfileOverview(glayvinHome);
-		expect(overview.available).toBe(true);
-		expect(overview.profile).toBe("default");
-		expect(
-			overview.packs.map((pack) => [pack.id, pack.layer, pack.teamName]),
-		).toEqual([
-			["core", "built-in", undefined],
-			["payments", "team", "cosmos-ai"],
-			["scratch", "local", undefined],
-			["ghost", "unknown", undefined],
+		expect(overview.source).toBe("resolver");
+		expect(overview.packs.map((pack) => [pack.id, pack.status])).toEqual([
+			["core", "effective"],
+			["context", "effective"],
+			["vision", "available"],
+			["noisy", "disabled"],
 		]);
-		expect(overview.packs[0]).toMatchObject({
-			description: "Core runtime",
-			packageCount: 2,
-			extensionCount: 1,
-			hookCount: 1,
-			commandCount: 2,
-		});
-		expect(overview.packs[1]).toMatchObject({
-			skillCount: 1,
-			commandCount: 1,
-		});
-		expect(overview.teams).toEqual([
+		expect(overview.profiles).toEqual([
 			{
-				name: "cosmos-ai",
-				path: team,
-				exists: true,
-				packIds: ["payments"],
+				id: "default",
+				layer: "built-in",
+				description: "Default profile",
+				active: true,
+				packIds: ["core"],
+			},
+			{
+				id: "minimal",
+				layer: "built-in",
+				description: undefined,
+				active: false,
+				packIds: [],
 			},
 		]);
 		expect(overview.packages).toEqual([
@@ -593,17 +609,70 @@ describe("glayvin profile overview", () => {
 				pack: "core",
 				excludedByCosmos: false,
 			},
-			{
-				name: "@gotgenes/pi-permission-system",
-				version: "24.0.0",
-				pack: "core",
-				excludedByCosmos: true,
-			},
 		]);
-		expect(overview.notes.join(" ")).toContain("could not be located");
 	});
 
-	it("lets a team pack override a built-in pack of the same id", () => {
+	it("flags a pack the profile never named as implicit, with the resolver's reason", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, async (_home, args) =>
+			args[0] === "packs"
+				? {
+						packs: [
+							{
+								id: "core",
+								source: "built-in",
+								status: "effective",
+								via: "profile",
+							},
+							{
+								id: "context",
+								source: "built-in",
+								status: "effective",
+								via: "includes",
+							},
+							{ id: "vision", source: "built-in", status: "available" },
+						],
+					}
+				: { profiles: [] },
+		);
+
+		expect(overview.packs.map((pack) => [pack.id, pack.implicit, pack.via]))
+			.toEqual([
+				["core", false, "profile"],
+				["context", true, "includes"],
+				// Only effective packs can be implicit.
+				["vision", false, undefined],
+			]);
+	});
+
+	it("falls back to resolved.json when the resolver cannot run", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+
+		expect(overview.source).toBe("files");
+		expect(overview.available).toBe(true);
+		expect(overview.packs.map((pack) => [pack.id, pack.layer, pack.implicit]))
+			.toEqual([
+				["core", "built-in", false],
+				["context", "built-in", true],
+			]);
+		expect(overview.packs[0].description).toBe("Core runtime");
+		expect(overview.profiles).toEqual([
+			{ id: "default", layer: "built-in", active: true, packIds: ["core"] },
+		]);
+		expect(overview.notes.join(" ")).toContain("resolver could not be run");
+	});
+
+	it("falls back when the resolver returns unusable output", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, async () => ({
+			packs: "not-an-array",
+		}));
+		expect(overview.source).toBe("files");
+		expect(overview.packs.map((pack) => pack.id)).toEqual(["core", "context"]);
+	});
+
+	it("attributes packs to the highest-precedence layer that has them", async () => {
 		const { root, glayvinHome, write } = setup();
 		const teamA = join(root, "team-a");
 		const teamB = join(root, "team-b");
@@ -615,21 +684,82 @@ describe("glayvin profile overview", () => {
 		});
 		write(join(glayvinHome, "config", "packs", "debug.json"), { id: "debug" });
 		write(join(teamA, "packs", "debug.json"), { id: "debug" });
-		// Nested `.glayvin/packs` is also a valid team layout, and the later team wins.
-		write(join(teamB, ".glayvin", "packs", "debug.json"), { id: "debug" });
+		write(join(teamB, "packs", "debug.json"), { id: "debug" });
+		write(join(glayvinHome, ".local", "glayvin", "packs", "scratch.json"), {
+			id: "scratch",
+			description: "Personal scratch pack",
+		});
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "default",
+			packs: ["debug", "scratch", "ghost"],
+		});
+
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(
+			overview.packs.map((pack) => [pack.id, pack.layer, pack.teamName]),
+		).toEqual([
+			// The later-registered team wins.
+			["debug", "team", "team-b"],
+			["scratch", "local", undefined],
+			["ghost", "unknown", undefined],
+		]);
+		expect(overview.notes.join(" ")).toContain("could not be traced to a layer");
+	});
+
+	it("ignores packs from a disabled team", async () => {
+		const { root, glayvinHome, write } = setup();
+		const team = join(root, "team-a");
+		write(join(glayvinHome, ".local", "glayvin.json"), {
+			teams: [{ name: "team-a", path: team }],
+		});
+		write(join(glayvinHome, ".local", "disabled.json"), { teams: ["team-a"] });
+		write(join(team, "packs", "debug.json"), { id: "debug" });
 		write(join(glayvinHome, ".local", "resolved.json"), {
 			profile: "default",
 			packs: ["debug"],
 		});
 
-		const overview = getGlayvinProfileOverview(glayvinHome);
-		expect(overview.packs[0]).toMatchObject({
-			layer: "team",
-			teamName: "team-b",
-		});
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(overview.teams[0].enabled).toBe(false);
+		expect(overview.packs[0].layer).toBe("unknown");
 	});
 
-	it("flags registered teams whose directories are gone", () => {
+	it("reports what each registered team contributes", async () => {
+		const { root, glayvinHome, write } = setup();
+		const team = join(root, "cosmos-ai");
+		write(join(glayvinHome, ".local", "glayvin.json"), {
+			teams: [{ name: "cosmos-ai", path: team }],
+		});
+		write(join(team, "mcp-config.json"), {
+			mcpServers: { figma: {}, sentry: {} },
+		});
+		mkdirSync(join(team, "skills", "defuddle"), { recursive: true });
+		mkdirSync(join(team, "skills", "triage"), { recursive: true });
+		writeFileSync(join(team, "copilot-instructions.md"), "team context");
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "default",
+			packs: [],
+		});
+
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(overview.teams).toEqual([
+			{
+				name: "cosmos-ai",
+				path: team,
+				exists: true,
+				enabled: true,
+				contributes: {
+					packIds: [],
+					profileIds: [],
+					mcpServerNames: ["figma", "sentry"],
+					skillCount: 2,
+					hasInstructions: true,
+				},
+			},
+		]);
+	});
+
+	it("flags registered teams whose directories are gone", async () => {
 		const { root, glayvinHome, write } = setup();
 		write(join(glayvinHome, ".local", "glayvin.json"), {
 			teams: [{ name: "stale", path: join(root, "missing") }],
@@ -638,7 +768,7 @@ describe("glayvin profile overview", () => {
 			profile: "minimal",
 			packs: [],
 		});
-		const overview = getGlayvinProfileOverview(glayvinHome);
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
 		expect(overview.teams[0]).toMatchObject({ name: "stale", exists: false });
 		expect(overview.notes.join(" ")).toContain("no longer exist");
 	});

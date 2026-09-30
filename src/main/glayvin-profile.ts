@@ -1,11 +1,19 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type {
+	GlayvinPackLayer,
 	GlayvinPackageSummary,
+	GlayvinPackStatus,
 	GlayvinPackSummary,
 	GlayvinProfileOverview,
+	GlayvinProfileSummary,
+	GlayvinTeamContributions,
 	GlayvinTeamSummary,
 } from "../shared/ipc";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Cosmos filters this package out of its managed agent directory so the desktop
@@ -14,13 +22,71 @@ import type {
  */
 const COSMOS_EXCLUDED_PACKAGE = /(^|[/@])pi-permission-system(?=$|[@/])/i;
 
+const RESOLVER_TIMEOUT_MS = 4000;
+
+export type ResolverRunner = (
+	glayvinHome: string,
+	args: string[],
+) => Promise<Record<string, unknown> | undefined>;
+
+/**
+ * Node executable for short-lived child processes.
+ *
+ * In the main process `process.execPath` is the Electron binary, which only behaves as
+ * Node when `ELECTRON_RUN_AS_NODE` is set. Electron's helper executable avoids the extra
+ * app that macOS otherwise shows in Launchpad. Deliberately derived from `process` rather
+ * than imported from paths.ts, so this module stays free of the `electron` import and
+ * remains testable under plain Node.
+ */
+function nodeExecutable(): string {
+	const helper = (process as NodeJS.Process & { helperExecPath?: string })
+		.helperExecPath;
+	return helper && existsSync(helper) ? helper : process.execPath;
+}
+
+/**
+ * Runs one of Glayvin's resolver CLI subcommands and returns its parsed JSON.
+ *
+ * Invokes `lib/resolver/bin/cli.mjs` directly rather than the `bin/glayvin` bash wrapper,
+ * because the wrapper installs the resolver's npm dependencies on demand and a settings
+ * pane must never block on that. Returns undefined on any failure — a missing resolver,
+ * missing dependencies, a timeout, or unparseable output all fall back to reading files.
+ */
+export const runResolverCli: ResolverRunner = async (glayvinHome, args) => {
+	const cli = join(glayvinHome, "lib", "resolver", "bin", "cli.mjs");
+	if (!existsSync(cli)) return undefined;
+	try {
+		const { stdout } = await execFileAsync(
+			nodeExecutable(),
+			[cli, ...args, "--json"],
+			{
+				cwd: glayvinHome,
+				env: {
+					...process.env,
+					GLAYVIN_HOME: glayvinHome,
+					ELECTRON_RUN_AS_NODE: "1",
+				},
+				encoding: "utf8",
+				timeout: RESOLVER_TIMEOUT_MS,
+				maxBuffer: 4 * 1024 * 1024,
+			},
+		);
+		return asObject(JSON.parse(stdout) as unknown);
+	} catch {
+		return undefined;
+	}
+};
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
 function readJsonObject(path: string): Record<string, unknown> | undefined {
 	if (!existsSync(path)) return undefined;
 	try {
-		const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
-		return value && typeof value === "object" && !Array.isArray(value)
-			? (value as Record<string, unknown>)
-			: undefined;
+		return asObject(JSON.parse(readFileSync(path, "utf8")) as unknown);
 	} catch {
 		return undefined;
 	}
@@ -53,58 +119,103 @@ function isDirectory(path: string): boolean {
 	}
 }
 
-function readTeams(config: Record<string, unknown> | undefined): {
-	name: string;
-	path: string;
-}[] {
-	return toRecordArray(config?.teams).flatMap((team) => {
-		const name = optionalString(team.name);
-		const path = optionalString(team.path);
-		return name && path ? [{ name, path }] : [];
-	});
+/** Lists the manifest ids in a `packs/` or `profiles/` directory. */
+function listManifestIds(dir: string): string[] {
+	try {
+		return readdirSync(dir)
+			.filter((name) => name.endsWith(".json"))
+			.map((name) => name.slice(0, -".json".length))
+			.sort();
+	} catch {
+		return [];
+	}
 }
 
-interface PackOrigin {
-	layer: GlayvinPackSummary["layer"];
-	teamName?: string;
-	manifestPath?: string;
+function countEntries(dir: string): number {
+	try {
+		return readdirSync(dir).filter((name) => !name.startsWith(".")).length;
+	} catch {
+		return 0;
+	}
+}
+
+function toLayer(value: unknown): GlayvinPackLayer {
+	return value === "built-in" || value === "team" || value === "local"
+		? value
+		: "unknown";
+}
+
+function toStatus(value: unknown): GlayvinPackStatus {
+	return value === "effective" || value === "available" || value === "disabled"
+		? value
+		: "unknown";
+}
+
+interface RegisteredTeam {
+	name: string;
+	path: string;
+	enabled: boolean;
 }
 
 /**
- * Resolves which configuration layer a pack manifest came from.
+ * Reads registered teams and their enabled state.
  *
- * `resolved.json` records only pack ids, never the layer or team that supplied them, so this
- * reconstructs Glayvin's documented discovery order rather than reading its output: built-in,
- * then each registered team in registration order with later teams winning, then local. The
- * highest-precedence match is returned.
+ * Mirrors the resolver's `readEnabledTeamDirs`: teams come from `.local/glayvin.json`,
+ * and a name listed under `teams` in `.local/disabled.json` contributes nothing.
  */
-function locatePack(
-	packId: string,
+function readTeams(glayvinHome: string): RegisteredTeam[] {
+	const config = readJsonObject(join(glayvinHome, ".local", "glayvin.json"));
+	const disabled = readJsonObject(join(glayvinHome, ".local", "disabled.json"));
+	const disabledNames = new Set(toStringArray(disabled?.teams));
+	return toRecordArray(config?.teams).flatMap((team) => {
+		const name = optionalString(team.name);
+		const path = optionalString(team.path);
+		if (!name || !path) return [];
+		return [{ name, path, enabled: !disabledNames.has(name) }];
+	});
+}
+
+function readTeamContributions(teamPath: string): GlayvinTeamContributions {
+	const servers = asObject(
+		readJsonObject(join(teamPath, "mcp-config.json"))?.mcpServers,
+	);
+	return {
+		packIds: listManifestIds(join(teamPath, "packs")),
+		profileIds: listManifestIds(join(teamPath, "profiles")),
+		mcpServerNames: servers ? Object.keys(servers).sort() : [],
+		skillCount: countEntries(join(teamPath, "skills")),
+		hasInstructions:
+			existsSync(join(teamPath, "copilot-instructions.team.md")) ||
+			existsSync(join(teamPath, "copilot-instructions.md")),
+	};
+}
+
+/**
+ * Probes the directories the resolver's `discoverLayers` searches, to find which layer a
+ * manifest came from. Highest precedence first.
+ *
+ * Repo-scoped layers (`$cwd/.glayvin` and `$cwd/.local/glayvin`) are deliberately not
+ * probed: which repo applies depends on where Glayvin was invoked, which Cosmos cannot
+ * know from the seed alone.
+ */
+function locateManifest(
+	kind: "packs" | "profiles",
+	id: string,
 	glayvinHome: string,
-	teams: { name: string; path: string }[],
-): PackOrigin {
-	const localManifest = join(glayvinHome, ".local", "packs", `${packId}.json`);
-	if (existsSync(localManifest))
-		return { layer: "local", manifestPath: localManifest };
+	teams: RegisteredTeam[],
+): { layer: GlayvinPackLayer; teamName?: string; manifestPath?: string } {
+	const homeLocal = join(glayvinHome, ".local", "glayvin", kind, `${id}.json`);
+	if (existsSync(homeLocal)) return { layer: "local", manifestPath: homeLocal };
 
 	for (const team of [...teams].reverse()) {
-		for (const candidate of [
-			join(team.path, "packs", `${packId}.json`),
-			join(team.path, ".glayvin", "packs", `${packId}.json`),
-		]) {
-			if (existsSync(candidate)) {
-				return {
-					layer: "team",
-					teamName: team.name,
-					manifestPath: candidate,
-				};
-			}
-		}
+		if (!team.enabled) continue;
+		const candidate = join(team.path, kind, `${id}.json`);
+		if (existsSync(candidate))
+			return { layer: "team", teamName: team.name, manifestPath: candidate };
 	}
 
-	const builtInManifest = join(glayvinHome, "config", "packs", `${packId}.json`);
-	if (existsSync(builtInManifest))
-		return { layer: "built-in", manifestPath: builtInManifest };
+	const builtIn = join(glayvinHome, "config", kind, `${id}.json`);
+	if (existsSync(builtIn)) return { layer: "built-in", manifestPath: builtIn };
 
 	return { layer: "unknown" };
 }
@@ -116,6 +227,39 @@ function countOwnedBy(
 	key: "owner" | "source",
 ): number {
 	return entries.filter((entry) => entry[key] === packId).length;
+}
+
+interface PackCounts {
+	packageCount: number;
+	extensionCount: number;
+	skillCount: number;
+	commandCount: number;
+	hookCount: number;
+}
+
+function packCounts(
+	resolved: Record<string, unknown>,
+	packId: string,
+): PackCounts {
+	return {
+		packageCount: countOwnedBy(
+			toRecordArray(resolved.packages),
+			packId,
+			"owner",
+		),
+		extensionCount: countOwnedBy(
+			toRecordArray(resolved.extensions),
+			packId,
+			"source",
+		),
+		skillCount: countOwnedBy(toRecordArray(resolved.skills), packId, "owner"),
+		commandCount: countOwnedBy(
+			toRecordArray(resolved.commands),
+			packId,
+			"owner",
+		),
+		hookCount: countOwnedBy(toRecordArray(resolved.hooks), packId, "owner"),
+	};
 }
 
 function summarizePackages(
@@ -142,8 +286,10 @@ function unavailable(
 ): GlayvinProfileOverview {
 	return {
 		available: false,
+		source: "files",
 		glayvinHome,
 		packs: [],
+		profiles: [],
 		teams: [],
 		packages: [],
 		notes,
@@ -151,18 +297,93 @@ function unavailable(
 	};
 }
 
+/** Packs the active profile manifest names directly, before `includes` expansion. */
+function declaredPackIds(
+	profileId: string | undefined,
+	glayvinHome: string,
+	teams: RegisteredTeam[],
+): string[] | undefined {
+	if (!profileId) return undefined;
+	const located = locateManifest("profiles", profileId, glayvinHome, teams);
+	if (!located.manifestPath) return undefined;
+	const manifest = readJsonObject(located.manifestPath);
+	return manifest ? toStringArray(manifest.packs) : undefined;
+}
+
+function packsFromResolver(
+	cliPacks: Record<string, unknown>[],
+	resolved: Record<string, unknown>,
+	glayvinHome: string,
+	teams: RegisteredTeam[],
+	declared: string[] | undefined,
+): GlayvinPackSummary[] {
+	return cliPacks.flatMap((entry) => {
+		const id = optionalString(entry.id);
+		if (!id) return [];
+		const layer = toLayer(entry.source);
+		const status = toStatus(entry.status);
+		const teamName =
+			layer === "team"
+				? locateManifest("packs", id, glayvinHome, teams).teamName
+				: undefined;
+		return [
+			{
+				id,
+				layer,
+				teamName,
+				description: optionalString(entry.description),
+				status,
+				via: optionalString(entry.via),
+				implicit:
+					status === "effective" && !!declared && !declared.includes(id),
+				...packCounts(resolved, id),
+			},
+		];
+	});
+}
+
+function profilesFromResolver(
+	cliProfiles: Record<string, unknown>[],
+	glayvinHome: string,
+	teams: RegisteredTeam[],
+): GlayvinProfileSummary[] {
+	return cliProfiles.flatMap((entry) => {
+		const id = optionalString(entry.id);
+		if (!id) return [];
+		const located = locateManifest("profiles", id, glayvinHome, teams);
+		const manifest = located.manifestPath
+			? readJsonObject(located.manifestPath)
+			: undefined;
+		return [
+			{
+				id,
+				layer: toLayer(entry.source),
+				description: optionalString(entry.description),
+				active: entry.active === true,
+				packIds: manifest ? toStringArray(manifest.packs) : [],
+			},
+		];
+	});
+}
+
 /**
  * Read-only view of the Glayvin profile Cosmos already inherits its packages from.
  *
- * Degrades with explanatory notes rather than throwing: a missing Glayvin home, a missing
- * `resolved.json`, or malformed JSON all return `available: false`.
+ * Prefers Glayvin's own resolver, which reports each pack's layer, effective status and
+ * inclusion reason directly. Falls back to reading `resolved.json` when the resolver
+ * cannot run, which still yields the active profile and its effective packs but no
+ * inventory of what else is available.
+ *
+ * Degrades with explanatory notes rather than throwing: a missing Glayvin home, a
+ * missing `resolved.json`, or malformed JSON all return `available: false`.
  */
-export function getGlayvinProfileOverview(
+export async function getGlayvinProfileOverview(
 	glayvinHome: string | undefined,
-): GlayvinProfileOverview {
+	runner: ResolverRunner = runResolverCli,
+): Promise<GlayvinProfileOverview> {
 	if (!glayvinHome) {
 		return unavailable(undefined, [
-			"Glayvin profile details are available when Cosmos can see a Glayvin home.",
+			"Glayvin details are available when Cosmos can see a Glayvin home.",
 		]);
 	}
 
@@ -191,59 +412,79 @@ export function getGlayvinProfileOverview(
 		);
 	}
 
-	const config = readJsonObject(configPath);
-	const registeredTeams = readTeams(config);
-	const notes: string[] = [];
-	if (!config) {
-		notes.push(
-			"No readable Glayvin local config was found, so registered teams could not be listed.",
-		);
-	}
-
-	const extensions = toRecordArray(resolved.extensions);
-	const packages = toRecordArray(resolved.packages);
-	const skills = toRecordArray(resolved.skills);
-	const hooks = toRecordArray(resolved.hooks);
-	const commands = toRecordArray(resolved.commands);
-
-	const teamPackIds = new Map<string, string[]>();
-	const packs: GlayvinPackSummary[] = toStringArray(resolved.packs).map(
-		(packId) => {
-			const origin = locatePack(packId, glayvinHome, registeredTeams);
-			if (origin.layer === "team" && origin.teamName) {
-				teamPackIds.set(origin.teamName, [
-					...(teamPackIds.get(origin.teamName) ?? []),
-					packId,
-				]);
-			}
-			const manifest = origin.manifestPath
-				? readJsonObject(origin.manifestPath)
-				: undefined;
-			return {
-				id: packId,
-				layer: origin.layer,
-				teamName: origin.teamName,
-				manifestPath: origin.manifestPath,
-				description: optionalString(manifest?.description),
-				packageCount: countOwnedBy(packages, packId, "owner"),
-				extensionCount: countOwnedBy(extensions, packId, "source"),
-				skillCount: countOwnedBy(skills, packId, "owner"),
-				hookCount: countOwnedBy(hooks, packId, "owner"),
-				commandCount: countOwnedBy(commands, packId, "owner"),
-			};
-		},
-	);
-
+	const registeredTeams = readTeams(glayvinHome);
 	const teams: GlayvinTeamSummary[] = registeredTeams.map((team) => ({
 		name: team.name,
 		path: team.path,
 		exists: isDirectory(team.path),
-		packIds: teamPackIds.get(team.name) ?? [],
+		enabled: team.enabled,
+		contributes: readTeamContributions(team.path),
 	}));
+
+	const notes: string[] = [];
+	const activeProfile = optionalString(resolved.profile);
+	const declared = declaredPackIds(activeProfile, glayvinHome, registeredTeams);
+
+	const cliPacks = toRecordArray(
+		(await runner(glayvinHome, ["packs", "list"]))?.packs,
+	);
+	const usingResolver = cliPacks.length > 0;
+
+	let packs: GlayvinPackSummary[];
+	let profiles: GlayvinProfileSummary[];
+
+	if (usingResolver) {
+		packs = packsFromResolver(
+			cliPacks,
+			resolved,
+			glayvinHome,
+			registeredTeams,
+			declared,
+		);
+		profiles = profilesFromResolver(
+			toRecordArray((await runner(glayvinHome, ["profile", "list"]))?.profiles),
+			glayvinHome,
+			registeredTeams,
+		);
+	} else {
+		notes.push(
+			"Glayvin's resolver could not be run, so this shows the packs already in effect rather than everything available.",
+		);
+		packs = toStringArray(resolved.packs).map((id) => {
+			const located = locateManifest("packs", id, glayvinHome, registeredTeams);
+			const manifest = located.manifestPath
+				? readJsonObject(located.manifestPath)
+				: undefined;
+			return {
+				id,
+				layer: located.layer,
+				teamName: located.teamName,
+				description: optionalString(manifest?.description),
+				status: "effective" as const,
+				implicit: !!declared && !declared.includes(id),
+				...packCounts(resolved, id),
+			};
+		});
+		profiles = activeProfile
+			? [
+					{
+						id: activeProfile,
+						layer: locateManifest(
+							"profiles",
+							activeProfile,
+							glayvinHome,
+							registeredTeams,
+						).layer,
+						active: true,
+						packIds: declared ?? [],
+					},
+				]
+			: [];
+	}
 
 	if (packs.some((pack) => pack.layer === "unknown")) {
 		notes.push(
-			"Some packs are active but their manifests could not be located, so their layer is unknown.",
+			"Some packs could not be traced to a layer, because their manifests are no longer on disk.",
 		);
 	}
 	if (teams.some((team) => !team.exists)) {
@@ -251,20 +492,16 @@ export function getGlayvinProfileOverview(
 			"Some registered teams point at directories that no longer exist.",
 		);
 	}
-	notes.push(
-		"Pack layers are reconstructed from where each manifest sits on disk, because Glayvin's resolved profile records pack ids only.",
-	);
-	notes.push(
-		"Cosmos mirrors this profile's packages into its own agent directory, minus the external permission system, and adds its bundled company package.",
-	);
 
 	return {
 		available: true,
+		source: usingResolver ? "resolver" : "files",
 		glayvinHome,
 		resolvedPath,
 		configPath,
-		profile: optionalString(resolved.profile),
+		profile: activeProfile,
 		packs,
+		profiles,
 		teams,
 		packages: summarizePackages(resolved),
 		notes,

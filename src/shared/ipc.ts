@@ -165,13 +165,24 @@ export interface McpConfigOverview {
 /** Which configuration layer a Glayvin pack manifest was found in. */
 export type GlayvinPackLayer = "built-in" | "team" | "local" | "unknown";
 
+/** Why the resolver pulled a pack into the effective set. */
+export type GlayvinPackStatus =
+	| "effective"
+	| "available"
+	| "disabled"
+	| "unknown";
+
 export interface GlayvinPackSummary {
 	id: string;
 	layer: GlayvinPackLayer;
 	/** Set when `layer` is "team": the registered team name the manifest was found under. */
 	teamName?: string;
-	manifestPath?: string;
 	description?: string;
+	status: GlayvinPackStatus;
+	/** The resolver's own inclusion reason, e.g. "profile", "includes", "core (auto)". */
+	via?: string;
+	/** Active despite the profile manifest never naming it — another pack pulled it in. */
+	implicit: boolean;
 	packageCount: number;
 	extensionCount: number;
 	skillCount: number;
@@ -179,12 +190,30 @@ export interface GlayvinPackSummary {
 	hookCount: number;
 }
 
+export interface GlayvinProfileSummary {
+	id: string;
+	layer: GlayvinPackLayer;
+	description?: string;
+	active: boolean;
+	/** Packs the manifest names directly, before the resolver expands `includes`. */
+	packIds: string[];
+}
+
+/** What a registered team layer actually supplies. */
+export interface GlayvinTeamContributions {
+	packIds: string[];
+	profileIds: string[];
+	mcpServerNames: string[];
+	skillCount: number;
+	hasInstructions: boolean;
+}
+
 export interface GlayvinTeamSummary {
 	name: string;
 	path: string;
 	exists: boolean;
-	/** Pack ids resolved from this team's directory. */
-	packIds: string[];
+	enabled: boolean;
+	contributes: GlayvinTeamContributions;
 }
 
 export interface GlayvinPackageSummary {
@@ -198,13 +227,15 @@ export interface GlayvinPackageSummary {
 
 export interface GlayvinProfileOverview {
 	available: boolean;
+	/** Whether pack and profile details came from Glayvin's resolver or from reading files directly. */
+	source: "resolver" | "files";
 	glayvinHome?: string;
 	resolvedPath?: string;
 	configPath?: string;
 	/** Active profile id, e.g. "default". */
 	profile?: string;
-	/** Fully resolved pack list, which can include packs the profile manifest never named. */
 	packs: GlayvinPackSummary[];
+	profiles: GlayvinProfileSummary[];
 	teams: GlayvinTeamSummary[];
 	packages: GlayvinPackageSummary[];
 	notes: string[];
