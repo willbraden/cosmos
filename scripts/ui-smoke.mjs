@@ -201,7 +201,7 @@ try {
 	});
 
 	await step("sidebar lists the persisted session; settings and providers open", async () => {
-		await waitFor(`[...document.querySelectorAll('.session-row .title')].some(t => t.textContent.includes('hello there'))`, "session in sidebar");
+		await waitFor(`[...document.querySelectorAll('.session-row .title')].some(t => t.textContent.toLowerCase().includes('hello there'))`, "session in sidebar");
 		await shot("07-full-conversation");
 		await evaluate(`document.querySelector('.sidebar-footer [title^="Settings"]').click()`);
 		await clickText(".modal-nav .menu-item", "Providers");
@@ -213,8 +213,8 @@ try {
 
 	await step("new session and reopening the old one restores history", async () => {
 		await evaluate(`document.querySelector('.sidebar-section-row [title^="New session in"]').click()`);
-		await waitFor(`document.body.innerText.includes('What should we build')`, "fresh session");
-		await clickText(".session-row", "hello there");
+		await waitFor(`document.body.innerText.includes('Ready when you are')`, "fresh session");
+		await clickText(".session-row", "Hello there");
 		await waitFor(`document.body.innerText.includes('Hello from the fake model') && document.querySelectorAll('.user-msg').length >= 4`, "history restored");
 	});
 
