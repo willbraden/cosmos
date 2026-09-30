@@ -6,10 +6,18 @@ import type { ExtensionUiRequest, PiRecord } from "./pi-types";
 export type PermissionMode = "ask" | "acceptEdits" | "auto";
 export type ThemePreference = "system" | "light" | "dark";
 
+/** Identifies a model well enough to re-select it; the full record comes from pi. */
+export interface ModelRef {
+	provider: string;
+	id: string;
+}
+
 export interface DesktopSettings {
 	theme: ThemePreference;
 	/** Permission mode applied to new sessions. */
 	permissionMode: PermissionMode;
+	/** Model applied to sessions started from Home. Null uses pi's own default. */
+	defaultModel: ModelRef | null;
 	notifications: boolean;
 	/** Minutes a background, idle session keeps its pi process before it is suspended. 0 disables suspension. */
 	idleSuspendMinutes: number;
@@ -39,6 +47,7 @@ export interface DesktopSettings {
 export const DEFAULT_SETTINGS: DesktopSettings = {
 	theme: "system",
 	permissionMode: "ask",
+	defaultModel: null,
 	notifications: true,
 	idleSuspendMinutes: 15,
 	piCliPath: "",

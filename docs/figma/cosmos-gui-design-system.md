@@ -30,7 +30,7 @@ Primary sources read for this doc:
 The renderer mounts `App` from `src/renderer/src/main.tsx`. The top-level shell in `src/renderer/src/App.tsx` is:
 
 - optional left `Sidebar`
-- main chat area (`ChatView` or `NewSessionView`)
+- main chat area (`ChatView` or `HomeView`)
 - optional right `ChangesPanel`
 - modal overlays like `SettingsModal`
 - floating utilities like `Toasts` and `IconButtonTooltips`
@@ -228,7 +228,7 @@ Only components and styles present in code are listed.
 Source:
 
 - style: `src/renderer/src/styles/app.css`
-- usage: `src/renderer/src/components/ChatView.tsx`, `SettingsModal.tsx`, `DialogCard.tsx`, `NewSessionView.tsx`, `ToolCard.tsx`
+- usage: `src/renderer/src/components/ChatView.tsx`, `SettingsModal.tsx`, `DialogCard.tsx`, `HomeView.tsx`, `ToolCard.tsx`
 
 Base behavior:
 
@@ -614,19 +614,18 @@ Real parts:
 
 Source:
 
-- structure: `src/renderer/src/components/ChatView.tsx`, `src/renderer/src/components/NewSessionView.tsx`
+- structure: `src/renderer/src/components/ChatView.tsx`, `src/renderer/src/components/HomeView.tsx`
 - style: `src/renderer/src/styles/app.css`
 
 Real elements seen in code/CSS:
 
 - `.empty`
 - `.empty-chat-welcome`
-- `.cosmos-wordmark`
 - `.cosmos-wordmark-hero`
 - `.empty-chat-actions`
 - `.empty-chat-action`
 - `.welcome-card`
-- workspace dashboard cards like `.workspace-summary-card`, `.repo-card`
+- Home cards like `.home-suggestion`, `.repo-card`
 
 ### 22. Toast
 

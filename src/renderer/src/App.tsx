@@ -6,8 +6,8 @@ import { ChangesPanel } from "./components/ChangesPanel";
 import { ChatView } from "./components/ChatView";
 import { DeveloperInspector } from "./components/DeveloperInspector";
 import { FeedbackModal } from "./components/FeedbackModal";
+import { HomeView } from "./components/HomeView";
 import { IconButtonTooltips } from "./components/IconButtonTooltips";
-import { NewSessionView } from "./components/NewSessionView";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
@@ -20,7 +20,7 @@ import {
 	expireDialogs,
 	exportHtml,
 	openExistingSession,
-	showWorkspaceDashboard,
+	showHome,
 	startNewSession,
 	stop,
 } from "./state/actions";
@@ -61,7 +61,7 @@ function handleMenu(command: MenuCommand): void {
 		case "new-session":
 			return void startNewSession(tab?.cwd);
 		case "open-folder":
-			return showWorkspaceDashboard();
+			return showHome();
 		case "settings":
 			return useStore.setState({ settingsPane: "general" });
 		case "search": {
@@ -151,7 +151,7 @@ export function App() {
 					<PanelLeftOpen size={16} />
 				</button>
 			)}
-			{tab ? <ChatView tab={tab} /> : <NewSessionView />}
+			{tab ? <ChatView tab={tab} /> : <HomeView />}
 			{tab && changesOpen && <ChangesPanel tab={tab} />}
 			{settingsPane && <SettingsModal pane={settingsPane} />}
 			{feedbackOpen && <FeedbackModal />}

@@ -5,6 +5,7 @@ import log from "electron-log/main";
 import {
 	DEFAULT_SETTINGS,
 	type DesktopSettings,
+	type ModelRef,
 	type PermissionMode,
 	type ThemePreference,
 } from "../shared/ipc";
@@ -27,6 +28,12 @@ function isSessionOrderMap(value: unknown): value is Record<string, string[]> {
 	);
 }
 
+function isModelRef(value: unknown): value is ModelRef {
+	if (!value || typeof value !== "object") return false;
+	const raw = value as Record<string, unknown>;
+	return typeof raw.provider === "string" && typeof raw.id === "string";
+}
+
 /**
  * Validate an untrusted settings patch (from disk or the renderer) field by field.
  * Unknown keys and wrongly typed values are dropped rather than trusted.
@@ -41,6 +48,9 @@ export function sanitizeSettingsPatch(
 		out.theme = raw.theme as ThemePreference;
 	if (MODES.includes(raw.permissionMode as PermissionMode))
 		out.permissionMode = raw.permissionMode as PermissionMode;
+	if (raw.defaultModel === null) out.defaultModel = null;
+	else if (isModelRef(raw.defaultModel))
+		out.defaultModel = { provider: raw.defaultModel.provider, id: raw.defaultModel.id };
 	if (typeof raw.notifications === "boolean")
 		out.notifications = raw.notifications;
 	if (typeof raw.sidebarCollapsed === "boolean")
