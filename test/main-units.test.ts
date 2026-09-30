@@ -20,6 +20,21 @@ import * as bridge from "../resources/pi-extension/desktop-bridge";
 import { ensureCosmosManagedAgentDir } from "../src/main/agent-home";
 import { fuzzyScore } from "../src/main/files";
 import {
+	type CommandResult,
+	type CommandRunner,
+	classifyRoot,
+	discoverTeams,
+	isRateLimited,
+	parseRootNames,
+	parseSearchHits,
+	readCache,
+	registerGlayvinTeam,
+	searchArgs,
+	searchQuery,
+	unionSearchHits,
+	writeCache,
+} from "../src/main/team-discovery";
+import {
 	inferGlayvinHomeFromAgentDir,
 	readGlayvinTeams,
 	resolveGlayvinHomePath,
@@ -973,5 +988,460 @@ describe("core repo list", () => {
 		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
 			expect(coreRepoCloneUrl(name)).toBe(`git@github.com:shipt/${name}.git`);
 		}
+	});
+});
+
+// Root listings captured from the real shipt org. Genuine team layers match four or
+// more layer markers here; product repos that merely carry one of the same filenames
+// match exactly one, which is the margin the classifier relies on.
+const REAL_ROOTS: Record<string, string[]> = {
+	"business-reports-team-context":
+		".gitignore README.md bin copilot-instructions.md infraspec.yaml instructions packs profiles skills".split(" "),
+	"cosmos-ai":
+		".github .gitignore README.md copilot-instructions.md disabled.json docs infraspec.yaml mcp-config.json scripts skills".split(" "),
+	designos:
+		".github README.md agents bin copilot-instructions.md disabled.json infraspec.yaml mcp-config.json skills".split(" "),
+	"glayvin-incident-management":
+		".github AGENTS.md README.md agents bin cmd configs copilot-instructions.md disabled.json docs go.mod go.sum infraspec.yaml internal skills templates".split(" "),
+	"glayvin-team-template":
+		"README.md agents bin copilot-instructions.md disabled.json infraspec.yaml mcp-config.json skills".split(" "),
+	"ux-ai-context":
+		".github .local README.md agents bin copilot-instructions.md disabled.json doc infraspec.yaml mcp-config.json projects schemas skills team-config.json".split(" "),
+	"fulfillment-engine":
+		".github Dockerfile Makefile README.md alerts.yaml cmd copilot-instructions.md docker-compose.yml go.mod go.sum infraspec.yaml internal migrations terraform vendor".split(" "),
+	locations:
+		".github Dockerfile Makefile README.md cmd copilot-instructions.md docker-compose.yml go.mod go.sum internal migrations terraform test tools".split(" "),
+	"marketplace-agent":
+		".github Dockerfile Makefile README.md agent cmd docker-compose.yml go.mod go.sum internal mcp-config.json migrations terraform".split(" "),
+	"spotter-agent":
+		".github Dockerfile Makefile README.md agent cmd docker-compose.yml go.mod go.sum internal mcp-config.json migrations terraform".split(" "),
+	"promo-planning-tool":
+		".github Dockerfile Makefile README.md app copilot-instructions.md docker-compose.yaml docs infraspec.yaml models pyproject.toml stubs tests".split(" "),
+	"shopper-temporal":
+		".github AGENTS.md Dockerfile README.md alerts.yaml copilot-instructions.md dynamicconfig infraspec.yaml terraform thanos".split(" "),
+	"timeslot-risk-ml-calculator":
+		".github Dockerfile Makefile README.md app copilot-instructions.md dags docker-compose.yml docs infraspec.yaml pyproject.toml scripts terraform tests".split(" "),
+};
+
+describe("team classification", () => {
+	const classOf = (repo: string) =>
+		classifyRoot(repo, REAL_ROOTS[repo]).classification;
+
+	it("accepts the real team layers in the org", () => {
+		for (const repo of [
+			"business-reports-team-context",
+			"cosmos-ai",
+			"designos",
+			"ux-ai-context",
+		]) {
+			expect(classOf(repo)).toBe("team");
+		}
+	});
+
+	// A layer that also ships a Go binary must not be vetoed by its product files,
+	// which is why three layer markers decide on their own.
+	it("keeps a team layer that also ships a service", () => {
+		const result = classifyRoot(
+			"glayvin-incident-management",
+			REAL_ROOTS["glayvin-incident-management"],
+		);
+		expect(result.classification).toBe("team");
+		expect(result.markers.filter((m) => m.kind === "product").length).toBeGreaterThan(0);
+	});
+
+	// These carry copilot-instructions.md or mcp-config.json and nothing else, which is
+	// why no single marker search can be trusted on its own.
+	it("rejects product repos that merely carry one marker", () => {
+		for (const repo of [
+			"fulfillment-engine",
+			"locations",
+			"marketplace-agent",
+			"spotter-agent",
+			"promo-planning-tool",
+			"shopper-temporal",
+			"timeslot-risk-ml-calculator",
+		]) {
+			expect(classOf(repo)).toBe("uncertain");
+		}
+	});
+
+	it("marks the template rather than offering it as a team", () => {
+		expect(classOf("glayvin-team-template")).toBe("template");
+	});
+
+	it("separates real layers from product repos by a wide margin", () => {
+		const layerCount = (repo: string) =>
+			classifyRoot(repo, REAL_ROOTS[repo]).markers.filter((m) => m.kind === "layer")
+				.length;
+		const layers = ["cosmos-ai", "designos", "ux-ai-context"].map(layerCount);
+		const products = ["fulfillment-engine", "marketplace-agent", "locations"].map(
+			layerCount,
+		);
+		expect(Math.min(...layers)).toBeGreaterThan(Math.max(...products) + 1);
+	});
+
+	it("flags a layer that curates the home screen repo list", () => {
+		expect(classifyRoot("x", ["copilot-instructions.md", "packs", "cosmos-repos.json"]))
+			.toMatchObject({ classification: "team", curatesRepos: true });
+		expect(classifyRoot("x", REAL_ROOTS["cosmos-ai"]).curatesRepos).toBe(false);
+	});
+
+	it("reports every marker it matched so the heuristic stays visible", () => {
+		const names = classifyRoot("designos", REAL_ROOTS.designos).markers.map(
+			(m) => m.name,
+		);
+		expect(names).toContain("copilot-instructions.md");
+		expect(names).toContain("skills");
+		expect(names).not.toContain("README.md");
+	});
+});
+
+describe("team search parsing", () => {
+	const item = (over: Record<string, unknown> = {}) => ({
+		path: "disabled.json",
+		repo: "designos",
+		description: "Design system context",
+		htmlUrl: "https://github.com/shipt/designos",
+		fork: false,
+		...over,
+	});
+
+	it("builds a root-scoped query per marker", () => {
+		expect(searchQuery("shipt", "disabled.json")).toBe(
+			"org:shipt filename:disabled.json path:/",
+		);
+		const args = searchArgs("shipt", "disabled.json");
+		expect(args.join(" ")).toContain(
+			encodeURIComponent("org:shipt filename:disabled.json path:/"),
+		);
+	});
+
+	it("keeps root-level hits and drops nested ones", () => {
+		const hits = parseSearchHits(
+			JSON.stringify([item(), item({ repo: "other", path: "nested/disabled.json" })]),
+		);
+		expect(hits.map((h) => h.repo)).toEqual(["designos"]);
+	});
+
+	it("drops forks and invalid repo names", () => {
+		const hits = parseSearchHits(
+			JSON.stringify([
+				item({ repo: "forked", fork: true }),
+				item({ repo: "../escape" }),
+				item(),
+			]),
+		);
+		expect(hits.map((h) => h.repo)).toEqual(["designos"]);
+	});
+
+	it("discards GitHub's placeholder descriptions", () => {
+		const [hit] = parseSearchHits(
+			JSON.stringify([
+				item({ repo: "glayvin-delivery", description: "Default description for glayvin-delivery" }),
+			]),
+		);
+		expect(hit.description).toBeUndefined();
+	});
+
+	it("survives a reply that is not JSON", () => {
+		expect(parseSearchHits("gh: rate limit exceeded")).toEqual([]);
+	});
+
+	it("unions the marker searches and keeps the best description", () => {
+		const union = unionSearchHits([
+			[{ repo: "b", htmlUrl: "u" }],
+			[{ repo: "b", htmlUrl: "u", description: "found later" }],
+			[{ repo: "a", htmlUrl: "u" }],
+		]);
+		expect(union.map((h) => h.repo)).toEqual(["a", "b"]);
+		expect(union[1].description).toBe("found later");
+	});
+
+	it("reads the root listing as one name per line", () => {
+		expect(parseRootNames("agents\nskills\n\n  packs  \n")).toEqual([
+			"agents",
+			"skills",
+			"packs",
+		]);
+	});
+
+	it("recognises a rate-limited reply", () => {
+		expect(isRateLimited({ stdout: "", stderr: "API rate limit exceeded", code: 1 })).toBe(true);
+		expect(isRateLimited({ stdout: "", stderr: "could not resolve host", code: 1 })).toBe(false);
+	});
+});
+
+describe("team discovery cache", () => {
+	const candidate = {
+		repo: "designos",
+		htmlUrl: "https://github.com/shipt/designos",
+		markers: [{ name: "skills", kind: "layer" as const }],
+		classification: "team" as const,
+		curatesRepos: false,
+	};
+
+	it("round-trips a snapshot", () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-cache-"));
+		writeCache(dir, "shipt", [candidate], 1234);
+		expect(readCache(dir, "shipt")).toEqual({
+			fetchedAt: 1234,
+			candidates: [candidate],
+		});
+	});
+
+	// Switching orgs must not show the previous org's teams.
+	it("ignores a snapshot taken for another org", () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-cache-"));
+		writeCache(dir, "shipt", [candidate], 1234);
+		expect(readCache(dir, "other-org")).toBeUndefined();
+	});
+
+	it("ignores a corrupt or unversioned file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-cache-"));
+		writeFileSync(join(dir, "team-discovery.json"), "{ not json", "utf8");
+		expect(readCache(dir, "shipt")).toBeUndefined();
+		writeFileSync(
+			join(dir, "team-discovery.json"),
+			JSON.stringify({ version: 99, org: "shipt", fetchedAt: 1, candidates: [] }),
+			"utf8",
+		);
+		expect(readCache(dir, "shipt")).toBeUndefined();
+	});
+
+	it("reports no snapshot when none was ever written", () => {
+		expect(readCache(mkdtempSync(join(tmpdir(), "teams-cache-")), "shipt")).toBeUndefined();
+	});
+});
+
+describe("team discovery", () => {
+	/** A fake gh/glayvin that answers from a script of matchers, in call order. */
+	function fakeRunner(
+		handlers: {
+			match: (file: string, args: string[]) => boolean;
+			reply: CommandResult;
+		}[],
+		calls: string[] = [],
+	) {
+		const run = async (file: string, args: string[]): Promise<CommandResult> => {
+			calls.push(`${file} ${args.join(" ")}`);
+			const hit = handlers.find((h) => h.match(file, args));
+			return hit ? hit.reply : { stdout: "", stderr: "no match", code: 1 };
+		};
+		return { run, calls };
+	}
+
+	const ok = (stdout: string): CommandResult => ({ stdout, stderr: "", code: 0 });
+	const fail = (stderr: string): CommandResult => ({ stdout: "", stderr, code: 1 });
+	const found = (repo: string) =>
+		ok(JSON.stringify([{ path: "disabled.json", repo, htmlUrl: `https://github.com/shipt/${repo}`, fork: false }]));
+
+	const baseOptions = (dir: string, run: CommandRunner) => ({
+		org: "shipt",
+		userDataDir: dir,
+		workspaceRootPath: join(dir, "workspace"),
+		glayvinHome: join(dir, ".glayvin"),
+		teams: [],
+		run,
+		now: () => 5000,
+	});
+
+	const happyHandlers = [
+		{ match: (_f: string, a: string[]) => a[0] === "which", reply: ok("/usr/bin/tool") },
+		{ match: (_f: string, a: string[]) => a[0] === "auth", reply: ok("Logged in") },
+		{ match: (_f: string, a: string[]) => a[1]?.includes("Accept") === true || a.some((x) => x.includes("/search/code")), reply: found("designos") },
+		{ match: (_f: string, a: string[]) => a.some((x) => x.includes("contents")), reply: ok(REAL_ROOTS.designos.join("\n")) },
+	];
+
+	it("classifies and lists what the searches turned up", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner(happyHandlers);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(true);
+		expect(result.fromCache).toBe(false);
+		expect(result.teams).toHaveLength(1);
+		expect(result.teams[0]).toMatchObject({
+			repo: "designos",
+			classification: "team",
+			nameWithOwner: "shipt/designos",
+			cloneUrl: "git@github.com:shipt/designos.git",
+			joined: false,
+		});
+	});
+
+	// Opening Settings must not fire ~20 API calls every time.
+	it("serves the cache without touching the network until asked to refresh", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+
+		const second = fakeRunner(happyHandlers);
+		const cached = await discoverTeams(baseOptions(dir, second.run));
+		expect(cached.fromCache).toBe(true);
+		expect(cached.fetchedAt).toBe(5000);
+		expect(cached.teams).toHaveLength(1);
+		expect(second.calls.some((c) => c.includes("/search/code"))).toBe(false);
+
+		const third = fakeRunner(happyHandlers);
+		const refreshed = await discoverTeams({
+			...baseOptions(dir, third.run),
+			refresh: true,
+		});
+		expect(refreshed.fromCache).toBe(false);
+		expect(third.calls.some((c) => c.includes("/search/code"))).toBe(true);
+	});
+
+	it("marks a registered team as joined", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const teamPath = join(dir, "workspace", "designos");
+		mkdirSync(teamPath, { recursive: true });
+		const result = await discoverTeams({
+			...baseOptions(dir, fakeRunner(happyHandlers).run),
+			teams: [{ name: "designos", path: teamPath }],
+		});
+		expect(result.teams[0].joined).toBe(true);
+		expect(result.teams[0].joinedPath).toBe(teamPath);
+	});
+
+	it("spots a clone that was never registered", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		mkdirSync(join(dir, "workspace", "designos"), { recursive: true });
+		const result = await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+		expect(result.teams[0].joined).toBe(false);
+		expect(result.teams[0].clonedPath).toBe(join(dir, "workspace", "designos"));
+	});
+
+	it("explains itself when gh is missing instead of throwing", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which" && a[1] === "glayvin", reply: ok("/bin/glayvin") },
+			{ match: (_f, a) => a[0] === "which" && a[1] === "gh", reply: fail("not found") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		expect(result.notes.join(" ")).toContain("gh auth login");
+		expect(result.teams).toEqual([]);
+	});
+
+	it("explains itself when gh is signed out", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: fail("not logged in") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		expect(result.notes.join(" ")).toContain("not signed in");
+	});
+
+	// Discovery is still useful without the CLI; only joining is off.
+	it("still lists teams when glayvin is missing, but cannot join", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which" && a[1] === "glayvin", reply: fail("not found") },
+			...happyHandlers,
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(true);
+		expect(result.canJoin).toBe(false);
+		expect(result.notes.join(" ")).toContain("glayvin manage teams add");
+	});
+
+	// A half-finished union would cache a list missing whole teams.
+	it("keeps the previous snapshot when a refresh is rate limited", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{
+				match: (_f, a) => a.some((x) => x.includes("/search/code")),
+				reply: { stdout: "", stderr: "API rate limit exceeded", code: 1 },
+			},
+		]);
+		const result = await discoverTeams({ ...baseOptions(dir, run), refresh: true });
+		expect(result.available).toBe(true);
+		expect(result.fromCache).toBe(true);
+		expect(result.teams).toHaveLength(1);
+		expect(result.notes.join(" ")).toContain("rate limit");
+		expect(readCache(dir, "shipt")?.candidates).toHaveLength(1);
+	});
+
+	it("fails softly on the very first refresh when there is no snapshot", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{ match: (_f, a) => a.some((x) => x.includes("/search/code")), reply: fail("could not resolve host") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		expect(result.teams).toEqual([]);
+		expect(result.notes.join(" ")).toContain("could not resolve host");
+	});
+
+	// A repo whose root will not list is not thereby proven innocent or guilty.
+	it("keeps a candidate whose root cannot be read, marked uncertain", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			...happyHandlers.slice(0, 3),
+			{ match: (_f, a) => a.some((x) => x.includes("contents")), reply: fail("404") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.teams[0].classification).toBe("uncertain");
+		expect(result.teams[0].markers).toEqual([]);
+	});
+
+	it("falls back to the default org when the setting is unusable", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const result = await discoverTeams({
+			...baseOptions(dir, fakeRunner(happyHandlers).run),
+			org: "not a valid org!",
+		});
+		expect(result.org).toBe("shipt");
+	});
+
+	it("says so plainly when the org has no team repos", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{ match: (_f, a) => a.some((x) => x.includes("/search/code")), reply: ok("[]") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(true);
+		expect(result.teams).toEqual([]);
+		expect(result.notes.join(" ")).toContain("No team config repos");
+	});
+});
+
+describe("registering a Glayvin team", () => {
+	it("hands the work to the glayvin CLI", async () => {
+		const calls: string[][] = [];
+		await registerGlayvinTeam({
+			name: "designos",
+			path: "/Users/x/Cosmos/designos",
+			run: async (file, args) => {
+				calls.push([file, ...args]);
+				return { stdout: "Added", stderr: "", code: 0 };
+			},
+		});
+		expect(calls[0]).toEqual([
+			"glayvin",
+			"manage",
+			"teams",
+			"add",
+			"designos",
+			"/Users/x/Cosmos/designos",
+		]);
+	});
+
+	it("surfaces the CLI's own complaint rather than an exit code", async () => {
+		await expect(
+			registerGlayvinTeam({
+				name: "designos",
+				path: "/tmp/designos",
+				run: async () => ({ stdout: "", stderr: "Team already exists\nmore", code: 1 }),
+			}),
+		).rejects.toThrow("Team already exists");
 	});
 });

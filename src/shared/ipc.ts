@@ -189,6 +189,47 @@ export interface FigmaAuthResetResult {
 	status: FigmaXcodeAuthStatus;
 }
 
+/** A file or directory at a repo root that hints at what the repo is. */
+export interface TeamMarker {
+	name: string;
+	/** `layer` suggests Glayvin team config; `product` suggests a deployable service. */
+	kind: "layer" | "product";
+}
+
+/** A team-config repo found in the org, with everything needed to judge and join it. */
+export interface DiscoveredTeam {
+	repo: string;
+	org: string;
+	nameWithOwner: string;
+	description?: string;
+	htmlUrl: string;
+	cloneUrl: string;
+	/** Every marker matched at the repo root, shown so the heuristic stays visible. */
+	markers: TeamMarker[];
+	classification: "team" | "template" | "uncertain";
+	/** True when this repo's path is registered in the user's glayvin.json. */
+	joined: boolean;
+	joinedPath?: string;
+	/** Set when the repo is already cloned into the workspace but not registered. */
+	clonedPath?: string;
+	/** True when the layer ships a cosmos-repos.json that curates the home screen. */
+	curatesRepos: boolean;
+}
+
+export interface TeamDiscovery {
+	available: boolean;
+	org: string;
+	workspaceRootPath: string;
+	glayvinHome?: string;
+	teams: DiscoveredTeam[];
+	notes: string[];
+	/** When the listed snapshot was fetched. Absent when nothing has been fetched yet. */
+	fetchedAt?: number;
+	fromCache: boolean;
+	/** False when the glayvin CLI is missing, so joining cannot be offered. */
+	canJoin: boolean;
+}
+
 export interface OpenSessionRequest {
 	/** Chosen by the renderer (a UUID) so it can show the session before pi finishes booting. */
 	tabId: string;
@@ -331,6 +372,11 @@ export interface DesktopApi {
 		config: Record<string, unknown>,
 	): Promise<McpConfigOverview>;
 	removePersonalMcpServer(name: string): Promise<McpConfigOverview>;
+
+	/** Glayvin team repos visible in the org. Served from cache unless `refresh` is set. */
+	getTeamDiscovery(options?: { refresh?: boolean }): Promise<TeamDiscovery>;
+	/** Clone a team repo into the workspace and register it with Glayvin. */
+	joinTeam(repo: string): Promise<TeamDiscovery>;
 
 	listSessions(): Promise<SessionSummary[]>;
 	searchSessions(query: string): Promise<string[]>;

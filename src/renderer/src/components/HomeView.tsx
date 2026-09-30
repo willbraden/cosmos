@@ -474,6 +474,8 @@ export function HomeView() {
 	const recent = useStore((s) => s.settings.recentProjects);
 	const home = useStore((s) => s.appInfo?.homeDir);
 	const workspaceRoot = useStore((s) => s.appInfo?.workspaceRoot);
+	// Joining a team can publish a new cosmos-repos.json, which changes these suggestions.
+	const workspaceRevision = useStore((s) => s.workspaceRevision);
 	const [health, setHealth] = useState<WorkspaceHealth | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [newExperimentOpen, setNewExperimentOpen] = useState(false);
@@ -508,7 +510,7 @@ export function HomeView() {
 		return () => {
 			cancelled = true;
 		};
-	}, [workspaceRoot]);
+	}, [workspaceRoot, workspaceRevision]);
 
 	// Grow the prompt box with its content up to the CSS max-height.
 	useLayoutEffect(() => {

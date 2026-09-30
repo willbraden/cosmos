@@ -34,6 +34,8 @@ const api: DesktopApi = {
 		ipcRenderer.invoke("mcp:upsert-personal", name, config),
 	removePersonalMcpServer: (name) =>
 		ipcRenderer.invoke("mcp:remove-personal", name),
+	getTeamDiscovery: (options) => ipcRenderer.invoke("teams:discover", options),
+	joinTeam: (repo) => ipcRenderer.invoke("teams:join", repo),
 
 	listSessions: () => ipcRenderer.invoke("sessions:list"),
 	searchSessions: (query) => ipcRenderer.invoke("sessions:search", query),

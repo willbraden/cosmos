@@ -1,10 +1,12 @@
 import type {
 	AppInfo,
 	DesktopSettings,
+	DiscoveredTeam,
 	FigmaXcodeAuthStatus,
 	McpConfigOverview,
 	McpServerDefinition,
 	ProviderInfo,
+	TeamDiscovery,
 } from "@shared/ipc";
 import {
 	CircleCheck,
@@ -20,6 +22,7 @@ import {
 	Server,
 	SlidersHorizontal,
 	Trash2,
+	Users,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -1497,9 +1500,310 @@ function About() {
 	);
 }
 
+function relativeTime(timestamp: number | undefined): string {
+	if (!timestamp) return "never";
+	const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+	if (seconds < 60) return "just now";
+	const units: [number, string][] = [
+		[60, "minute"],
+		[60, "hour"],
+		[24, "day"],
+	];
+	let value = seconds;
+	let label = "second";
+	for (const [size, name] of units) {
+		if (value < size) break;
+		value = Math.floor(value / size);
+		label = name;
+	}
+	return `${value} ${label}${value === 1 ? "" : "s"} ago`;
+}
+
+function TeamCard({
+	team,
+	canJoin,
+	busy,
+	progress,
+	onJoin,
+}: {
+	team: DiscoveredTeam;
+	canJoin: boolean;
+	busy: boolean;
+	progress: string;
+	onJoin: () => void;
+}) {
+	const layers = team.markers.filter((marker) => marker.kind === "layer");
+	// Only worth showing on a repo we are unsure about, where they are the evidence against.
+	const products = team.markers.filter((marker) => marker.kind === "product");
+	const showProducts = team.classification === "uncertain";
+	return (
+		<div className="mcp-card">
+			<div className="mcp-card-header">
+				<div className="info">
+					<div className="mcp-title-row">
+						<strong>{team.repo}</strong>
+						<div className="mcp-badges">
+							{team.joined && (
+								<span className="badge">
+									<CircleCheck size={11} /> Joined
+								</span>
+							)}
+							{!team.joined && team.clonedPath && (
+								<span className="mcp-badge neutral">Already cloned</span>
+							)}
+							{team.curatesRepos && (
+								<span className="mcp-badge neutral">Suggests repos</span>
+							)}
+						</div>
+					</div>
+					{team.description && <div className="source">{team.description}</div>}
+					<div className="small-text muted selectable">
+						{layers.map((marker) => marker.name).join(" · ") ||
+							"No team-layer files found at the repo root"}
+						{showProducts && products.length > 0 && (
+							<> · looks like a service ({products.slice(0, 3).map((m) => m.name).join(", ")})</>
+						)}
+					</div>
+					{team.joined && team.joinedPath && (
+						<div className="small-text muted selectable">{team.joinedPath}</div>
+					)}
+					{busy && progress && (
+						<div className="small-text muted">{progress}</div>
+					)}
+				</div>
+				<div className="mcp-actions">
+					<button
+						type="button"
+						className="btn small"
+						onClick={() => void api.openExternal(team.htmlUrl)}
+					>
+						<ExternalLink size={13} /> GitHub
+					</button>
+					{team.joined ? (
+						<button
+							type="button"
+							className="btn small"
+							onClick={() => void api.revealPath(team.joinedPath ?? "")}
+						>
+							<FolderOpen size={13} /> Reveal
+						</button>
+					) : (
+						team.classification !== "template" && (
+							<button
+								type="button"
+								className="btn small primary"
+								disabled={!canJoin || busy}
+								onClick={onJoin}
+								title={
+									canJoin ? undefined : "The glayvin command is not on your PATH"
+								}
+							>
+								{busy ? (
+									<>
+										<SpinnerIcon size={13} /> Joining…
+									</>
+								) : team.clonedPath ? (
+									"Register"
+								) : (
+									"Join"
+								)}
+							</button>
+						)
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function Teams() {
+	const info = useStore((s) => s.appInfo);
+	const [discovery, setDiscovery] = useState<TeamDiscovery | null>(null);
+	const [loading, setLoading] = useState(true);
+	const [joining, setJoining] = useState<string | null>(null);
+	const [progress, setProgress] = useState("");
+
+	const load = useCallback(async (refresh: boolean) => {
+		setLoading(true);
+		try {
+			setDiscovery(await api.getTeamDiscovery({ refresh }));
+		} catch (error) {
+			toast("error", errorMessage(error));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		void load(false);
+	}, [load]);
+
+	useEffect(
+		() =>
+			api.onWorkspaceProgress(({ name, message }) => {
+				if (name === joining) setProgress(message);
+			}),
+		[joining],
+	);
+
+	const join = async (repo: string) => {
+		setJoining(repo);
+		setProgress("");
+		try {
+			setDiscovery(await api.joinTeam(repo));
+			toast("info", `Joined ${repo}.`);
+			// The new layer may publish a repo list, so let Home pick it up.
+			useStore.setState((s) => ({ workspaceRevision: s.workspaceRevision + 1 }));
+		} catch (error) {
+			toast("error", errorMessage(error));
+		} finally {
+			setJoining(null);
+			setProgress("");
+		}
+	};
+
+	const joined = discovery?.teams.filter((team) => team.joined) ?? [];
+	const available =
+		discovery?.teams.filter(
+			(team) => !team.joined && team.classification === "team",
+		) ?? [];
+	const uncertain =
+		discovery?.teams.filter(
+			(team) => !team.joined && team.classification === "uncertain",
+		) ?? [];
+	const template = discovery?.teams.find(
+		(team) => team.classification === "template" && !team.joined,
+	);
+
+	const cardProps = (team: DiscoveredTeam) => ({
+		team,
+		canJoin: discovery?.canJoin ?? false,
+		busy: joining === team.repo,
+		progress,
+		onJoin: () => void join(team.repo),
+	});
+
+	return (
+		<>
+			<h3>Teams</h3>
+			<div className="muted small-text">
+				A team is a shared layer of Glayvin config — packs, profiles, skills and MCP
+				servers. Joining one clones it into your workspace, registers it with Glayvin,
+				and can change which repos Cosmos suggests on the home screen.
+			</div>
+			<div className="mcp-toolbar">
+				<button
+					type="button"
+					className="btn small"
+					disabled={loading}
+					onClick={() => void load(true)}
+				>
+					<RefreshCw size={12} /> Refresh
+				</button>
+			</div>
+
+			{loading && (
+				<div className="working">
+					<SpinnerIcon size={14} /> Looking for teams…
+				</div>
+			)}
+
+			{!loading && discovery && (
+				<>
+					<div className="mcp-meta">
+						<div>
+							<strong>Organization:</strong>{" "}
+							<span className="muted selectable">{discovery.org}</span>
+						</div>
+						<div>
+							<strong>Workspace:</strong>{" "}
+							<span className="muted selectable">
+								{tildify(discovery.workspaceRootPath, info?.homeDir)}
+							</span>
+						</div>
+						<div>
+							<strong>Last checked:</strong>{" "}
+							<span className="muted">{relativeTime(discovery.fetchedAt)}</span>
+						</div>
+					</div>
+
+					{discovery.notes.map((note) => (
+						<div key={note} className="notice info" style={{ marginTop: 10 }}>
+							{note}
+						</div>
+					))}
+
+					{joined.length > 0 && (
+						<>
+							<h4 style={{ marginTop: 18 }}>Your teams</h4>
+							<div className="mcp-list">
+								{joined.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</>
+					)}
+
+					{available.length > 0 && (
+						<>
+							<h4 style={{ marginTop: 18 }}>Available in {discovery.org}</h4>
+							<div className="muted small-text" style={{ marginBottom: 8 }}>
+								You already have read access to every repo listed here — that access is
+								the only thing a team membership has ever been.
+							</div>
+							<div className="mcp-list">
+								{available.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</>
+					)}
+
+					{discovery.available && available.length === 0 && joined.length === 0 && (
+						<div className="muted" style={{ marginTop: 14 }}>
+							No team layers matched in {discovery.org}.
+						</div>
+					)}
+
+					{uncertain.length > 0 && (
+						<details className="mcp-tools" style={{ marginTop: 18 }}>
+							<summary>Not sure about these ({uncertain.length})</summary>
+							<div className="muted small-text" style={{ margin: "8px 0" }}>
+								These carry one file a team layer would have, but otherwise look like
+								ordinary services. Cosmos is guessing, so they are listed rather than
+								hidden — join one anyway if you know better.
+							</div>
+							<div className="mcp-list">
+								{uncertain.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</details>
+					)}
+
+					{template && (
+						<div className="notice info" style={{ marginTop: 18 }}>
+							<strong>{template.repo}</strong> is the starting point for making a new
+							team, not one to join.{" "}
+							<button
+								type="button"
+								className="btn small"
+								onClick={() => void api.openExternal(template.htmlUrl)}
+							>
+								Open on GitHub
+							</button>
+						</div>
+					)}
+				</>
+			)}
+		</>
+	);
+}
+
 const PANES: { id: SettingsPane; label: string; icon: typeof Plug }[] = [
 	{ id: "general", label: "General", icon: SlidersHorizontal },
 	{ id: "providers", label: "Providers", icon: KeyRound },
+	{ id: "teams", label: "Teams", icon: Users },
 	{ id: "mcps", label: "MCPs", icon: Plug },
 	{ id: "about", label: "About", icon: Info },
 ];
@@ -1555,6 +1859,7 @@ export function SettingsModal({ pane }: { pane: SettingsPane }) {
 					</div>
 					{pane === "general" && <General settings={settings} update={update} />}
 					{pane === "providers" && <Providers />}
+					{pane === "teams" && <Teams />}
 					{pane === "mcps" && <Mcps />}
 					{pane === "about" && <About />}
 				</div>
