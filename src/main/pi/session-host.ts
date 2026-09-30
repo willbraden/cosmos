@@ -319,6 +319,10 @@ export class SessionHost {
 				...(process.env.GLAYVIN_HOME
 					? { GLAYVIN_HOME: process.env.GLAYVIN_HOME }
 					: {}),
+				// MCP servers that ship UI resources otherwise pop a browser tab,
+				// which sends the user out of Cosmos to read a tool result.
+				// Suppressing the viewer returns the result inline instead.
+				MCP_UI_VIEWER: baseEnv.MCP_UI_VIEWER ?? "none",
 				ELECTRON_RUN_AS_NODE: "1",
 				PI_DESKTOP: "1",
 				COSMOS_DESKTOP: "1",
