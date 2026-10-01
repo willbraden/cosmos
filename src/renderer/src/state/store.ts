@@ -69,7 +69,7 @@ export interface Toast {
 	action?: { label: string; run(): void };
 }
 
-export type SettingsPane = "general" | "providers" | "mcps" | "about";
+export type SettingsPane = "general" | "providers" | "teams" | "mcps" | "about";
 
 export interface AppStore {
 	appInfo?: AppInfo;
@@ -91,6 +91,8 @@ export interface AppStore {
 	toasts: Toast[];
 	focusComposerTick: number;
 	focusSearchTick: number;
+	/** Bumped when a join changes what a team layer publishes, so Home refetches. */
+	workspaceRevision: number;
 }
 
 export const useStore = create<AppStore>(() => ({
@@ -110,6 +112,7 @@ export const useStore = create<AppStore>(() => ({
 	toasts: [],
 	focusComposerTick: 0,
 	focusSearchTick: 0,
+	workspaceRevision: 0,
 }));
 
 export function newTab(

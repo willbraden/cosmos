@@ -73,6 +73,12 @@ import type { SupervisorConfig } from "./session-supervisor-protocol";
 import { SessionSupervisorClient } from "./session-supervisor-client";
 import { SettingsStore } from "./settings";
 import { resolveShellEnv } from "./shell-env";
+import {
+	createCommandRunner,
+	discoverTeams,
+	registerGlayvinTeam,
+	setGlayvinTeamEnabled,
+} from "./team-discovery";
 import { getWorktreeSupport, previewManagedWorktree } from "./worktrees";
 import {
 	assertWorkspaceEntryName,
@@ -81,7 +87,9 @@ import {
 	findCoreRepo,
 	inspectWorkspace,
 	isPathInsideWorkspace,
+	isValidRepoName,
 	linkWorkspaceRepo,
+	normalizeOrg,
 	resolveCoreRepos,
 	unlinkWorkspaceRepo,
 	workspaceEntryPath,
@@ -156,6 +164,23 @@ function currentCoreRepos(current: DesktopSettings) {
 
 /** Repos with a clone in flight, so a double-click cannot start two of them. */
 const cloningRepos = new Set<string>();
+
+/** Teams mid-join, for the same reason: clone plus register must not run twice. */
+const joiningTeams = new Set<string>();
+
+async function currentTeamDiscovery(options: { refresh: boolean }) {
+	const current = settings.get();
+	const glayvinHome = resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME);
+	return discoverTeams({
+		org: current.coreRepoOrg,
+		userDataDir: app.getPath("userData"),
+		workspaceRootPath: resolveWorkspaceRootPath(current),
+		glayvinHome,
+		teams: readGlayvinTeams(glayvinHome),
+		refresh: options.refresh,
+		run: createCommandRunner(await resolveShellEnv(), glayvinHome),
+	});
+}
 
 /**
  * Folder picker for symlink targets. Unlike `dialog:pick-folder` this deliberately
@@ -665,6 +690,76 @@ function registerIpc(): void {
 		unlinkWorkspaceRepo(rootPath, String(name ?? ""));
 		return currentWorkspaceHealth();
 	});
+	ipcMain.handle("teams:discover", async (_e, options: unknown) => {
+		const refresh = !!(options as { refresh?: unknown } | null)?.refresh;
+		return currentTeamDiscovery({ refresh });
+	});
+	ipcMain.handle("teams:join", async (_e, repo: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(repo ?? ""));
+		if (!isValidRepoName(repoName)) {
+			throw new Error(`${repoName} is not a valid repository name.`);
+		}
+		if (joiningTeams.has(repoName)) {
+			throw new Error(`${repoName} is already being joined.`);
+		}
+		const current = settings.get();
+		const rootPath = resolveWorkspaceRootPath(current);
+		const org = normalizeOrg(current.coreRepoOrg);
+		const target = workspaceEntryPath(rootPath, repoName);
+		joiningTeams.add(repoName);
+		try {
+			if (!existsSync(target)) {
+				send("workspace:progress", { name: repoName, message: "Starting clone…" });
+				await cloneWorkspaceRepo({
+					rootPath,
+					name: repoName,
+					url: coreRepoCloneUrl(repoName, org),
+					env: await resolveShellEnv(),
+					onProgress: (message) =>
+						send("workspace:progress", { name: repoName, message }),
+				});
+			}
+			send("workspace:progress", { name: repoName, message: "Registering with Glayvin…" });
+			await registerGlayvinTeam({
+				name: repoName,
+				path: target,
+				run: createCommandRunner(
+					await resolveShellEnv(),
+					resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME),
+				),
+			});
+			log.info(`Joined team ${repoName} at ${target}`);
+			return currentTeamDiscovery({ refresh: false });
+		} finally {
+			joiningTeams.delete(repoName);
+			send("workspace:progress", { name: repoName, message: "" });
+		}
+	});
+	ipcMain.handle(
+		"teams:set-enabled",
+		async (_e, name: unknown, enabled: unknown) => {
+			const teamName = String(name ?? "").trim();
+			if (!teamName) throw new Error("A team name is required.");
+			if (joiningTeams.has(teamName)) {
+				throw new Error(`${teamName} is busy.`);
+			}
+			joiningTeams.add(teamName);
+			try {
+				await setGlayvinTeamEnabled({
+					name: teamName,
+					enabled: !!enabled,
+					run: createCommandRunner(
+						await resolveShellEnv(),
+						resolveGlayvinHomePath(settings.get(), INITIAL_GLAYVIN_HOME),
+					),
+				});
+				log.info(`${enabled ? "Enabled" : "Disabled"} team ${teamName}`);
+				return currentTeamDiscovery({ refresh: false });
+			} finally {
+				joiningTeams.delete(teamName);
+			}
+		},
+	);
 	ipcMain.handle("mcp:overview", async () => {
 		const agentDir = getAgentDir();
 		const overview = await getMcpOverview(
