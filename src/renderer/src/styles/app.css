@@ -730,7 +730,14 @@ select {
 .assistant-msg {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: 6px;
+}
+
+/* Activity rows pack tightly; prose earns its own breathing room. */
+.assistant-msg > .md,
+.assistant-msg > .error-card,
+.assistant-msg > .assistant-footer {
+	margin: 6px 0;
 }
 
 .assistant-footer {
@@ -814,8 +821,8 @@ select {
 .md {
 	user-select: text;
 	word-wrap: break-word;
-	font-size: 14.5px;
-	line-height: 1.65;
+	font-size: 15.5px;
+	line-height: 1.7;
 }
 
 .md > :first-child {
@@ -1016,73 +1023,67 @@ select {
 	width: 100%;
 	border: none;
 	background: transparent;
-	padding: 4px 6px;
-	margin-left: -6px;
-	border-radius: 7px;
+	padding: 2px 0;
 	color: var(--color-foreground-neutral-default-normal);
 	font-size: 13px;
 	text-align: left;
 	min-width: 0;
 }
 
-.fold-header.active-thread {
-	flex-direction: column;
-	align-items: stretch;
-	gap: 4px;
-	padding: 8px 10px;
-	margin-left: 0;
-	border: 1px solid var(--color-border-neutral-subtle);
-	background: var(--color-background-neutral-default-normal-idle);
+/* Reasoning sits inline with the tool rows, so it only differs in weight. */
+.thinking-header {
+	color: var(--color-foreground-neutral-default-subtle);
 }
 
-.assistant-turn-header {
-	padding: 8px 10px;
-	margin-left: 0;
-	border: 1px solid var(--color-border-neutral-subtle);
-	background: var(--color-background-neutral-default-normal-idle);
-}
-
-.assistant-turn-header.is-live {
+/* One 14px slot holds the resting icon and the chevron; hover/expanded swaps them. */
+.fold-icon {
 	position: relative;
-	isolation: isolate;
-	overflow: hidden;
-	border-color: color-mix(
-		in srgb,
-		var(--color-border-brand-strong, var(--color-border-neutral-subtle)) 45%,
-		var(--color-border-neutral-subtle)
-	);
-	background: color-mix(
-		in srgb,
-		var(
-				--color-background-brand-default-subtle-idle,
-				var(--color-background-neutral-default-normal-idle)
-			)
-			28%,
-		var(--color-background-neutral-default-normal-idle)
-	);
+	flex-shrink: 0;
+	width: 14px;
+	height: 14px;
 }
 
-.assistant-turn-header.is-live::after {
-	content: "";
+.fold-header .fold-icon > * {
 	position: absolute;
 	inset: 0;
-	background: linear-gradient(
-		110deg,
-		transparent 0%,
-		transparent 32%,
-		rgb(255 255 255 / 0.28) 50%,
-		transparent 68%,
-		transparent 100%
-	);
-	transform: translateX(-120%);
-	animation: transcript-shimmer 2.2s linear infinite;
-	pointer-events: none;
-	z-index: 0;
+	transition:
+		opacity 0.12s,
+		transform 300ms ease;
 }
 
-.assistant-turn-header > * {
-	position: relative;
-	z-index: 1;
+.fold-header .fold-icon-chevron {
+	opacity: 0;
+}
+
+/* Collapsed points down; expanded flips it up. */
+.fold-header[aria-expanded="true"] .fold-icon-chevron {
+	transform: rotate(180deg);
+}
+
+.fold-header:hover .fold-icon-rest,
+.fold-header[aria-expanded="true"] .fold-icon-rest {
+	opacity: 0;
+}
+
+.fold-header:hover .fold-icon-chevron,
+.fold-header[aria-expanded="true"] .fold-icon-chevron {
+	opacity: 1;
+}
+
+.thinking-header.is-live .label {
+	background: linear-gradient(
+		100deg,
+		var(--color-foreground-neutral-default-subtle) 0%,
+		var(--color-foreground-neutral-default-subtle) 35%,
+		var(--color-foreground-neutral-default-strong) 50%,
+		var(--color-foreground-neutral-default-subtle) 65%,
+		var(--color-foreground-neutral-default-subtle) 100%
+	);
+	background-size: 250% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	animation: transcript-shimmer 2.2s linear infinite;
 }
 
 .fold-header-main {
@@ -1102,7 +1103,7 @@ select {
 }
 
 .fold-header:hover {
-	background: var(--color-background-neutral-default-subtle-hover);
+	background: transparent;
 	color: var(--color-foreground-neutral-default-strong);
 }
 
@@ -1116,16 +1117,6 @@ select {
 .fold-header .label code {
 	font-family: var(--font-family-mono);
 	font-size: 12px;
-}
-
-.fold-header .chev {
-	flex-shrink: 0;
-	transition: transform 0.15s;
-	color: var(--color-foreground-neutral-default-subtle);
-}
-
-.fold-header .chev.open {
-	transform: rotate(90deg);
 }
 
 .fold-header .tail {
@@ -1231,61 +1222,48 @@ select {
 
 @keyframes transcript-shimmer {
 	0% {
-		transform: translateX(-120%);
+		background-position: 150% 0;
 	}
 	100% {
-		transform: translateX(120%);
+		background-position: -50% 0;
 	}
 }
 
-.reasoning-body {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	margin-top: 6px;
+.thinking-reveal {
+	display: grid;
+	grid-template-rows: 0fr;
+	opacity: 0;
+	transition:
+		grid-template-rows 300ms ease,
+		opacity 300ms ease;
 }
 
-.assistant-turn-body {
-	margin-top: 8px;
-	padding: 10px;
-	border: 1px solid var(--color-border-neutral-subtle);
-	border-radius: var(--border-radius-8);
-	background: var(--color-background-neutral-default-subtle-idle);
+.thinking-reveal.expanded {
+	grid-template-rows: 1fr;
+	opacity: 1;
 }
 
-.assistant-turn-step {
-	position: relative;
-	padding-left: 12px;
-}
-
-.assistant-turn-step::before {
-	content: "";
-	position: absolute;
-	left: 0;
-	top: 4px;
-	bottom: 4px;
-	width: 2px;
-	border-radius: 999px;
-	background: var(--color-border-neutral-subtle);
-}
-
-.assistant-turn-step + .assistant-turn-step {
-	margin-top: 10px;
-	padding-top: 10px;
-	border-top: 1px solid var(--color-border-neutral-subtle);
-}
-
-.reasoning-note {
-	border: 1px solid var(--color-border-neutral-subtle);
-	border-radius: var(--border-radius-8);
-	background: var(--color-background-neutral-default-normal-idle);
+.thinking-reveal-inner {
+	min-height: 0;
 	overflow: hidden;
 }
 
-.thinking-body {
-	margin: 4px 0 2px 8px;
-	padding: 0 12px 10px 14px;
+@media (prefers-reduced-motion: reduce) {
+	.thinking-reveal,
+	.thinking-header .fold-icon > * {
+		transition: none;
+	}
+}
+
+/* Reasoning text hangs off a rail aligned under the fold icon. */
+.thinking-content {
+	margin-top: 6px;
+	margin-left: 6px;
+	padding-left: 15px;
 	border-left: 2px solid var(--color-border-neutral-subtle);
+}
+
+.thinking-body {
 	color: var(--color-foreground-neutral-default-normal);
 	font-size: 13px;
 	white-space: pre-wrap;

@@ -1,7 +1,7 @@
 import {
 	ArrowDown,
 	Brain,
-	ChevronRight,
+	ChevronDown,
 	CircleAlert,
 	History,
 	Info,
@@ -18,11 +18,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	reasoningStepCount,
-	summarizeBusyWork,
-	summarizeReasoning,
-} from "../lib/activity";
+import { splitThoughts, summarizeBusyWork } from "../lib/activity";
 import { formatTokens } from "../lib/api";
 import { forkFromMessage, parsePermissionPrompt } from "../state/actions";
 import { isHiddenUserPromptText, type Block, type ChatItem, type ChatState } from "../state/chat-model";
@@ -32,23 +28,52 @@ import { CopyButton, Markdown } from "./Markdown";
 import { SpinnerIcon } from "./SpinnerIcon";
 import { ToolCard } from "./ToolCard";
 
-function ReasoningNote({
-	text,
+function ThinkingFold({
+	title,
+	body,
 	redacted,
+	live,
 }: {
-	text: string;
-	redacted?: boolean;
+	title: string | null;
+	body: string;
+	redacted: boolean;
+	live: boolean;
 }) {
-	if (!text && !redacted) return null;
+	const [open, setOpen] = useState(false);
+	const { mounted, expanded } = useCollapseAnimation(open);
+	const label = title ?? (redacted ? "Thinking (redacted)" : "Thinking");
 	return (
-		<div className="reasoning-note">
-			<div className="tool-section-label">
-				{redacted ? "Reasoning (redacted)" : "Reasoning"}
-			</div>
-			{text ? (
-				<div className="thinking-body">{text}</div>
-			) : (
-				<div className="thinking-body muted">This reasoning was redacted.</div>
+		<div className="fold thinking-fold">
+			<button
+				type="button"
+				className={`fold-header thinking-header${live ? " is-live shimmer" : ""}`}
+				onClick={() => setOpen(!open)}
+				aria-expanded={open}
+			>
+				<span className="fold-icon">
+					{live ? (
+						<SpinnerIcon size={14} className="fold-icon-rest" />
+					) : (
+						<Brain size={14} className="fold-icon-rest" />
+					)}
+					<ChevronDown size={14} className="fold-icon-chevron" />
+				</span>
+				<span className="label">{label}</span>
+			</button>
+			{mounted && (
+				<div className={`thinking-reveal${expanded ? " expanded" : ""}`}>
+					<div className="thinking-reveal-inner">
+						<div className="thinking-content">
+							{body ? (
+								<div className="thinking-body">{body}</div>
+							) : (
+								<div className="thinking-body muted">
+									This reasoning was redacted.
+								</div>
+							)}
+						</div>
+					</div>
+				</div>
 			)}
 		</div>
 	);
@@ -78,149 +103,6 @@ function hasActiveReasoningWork(
 			(!tools[block.id] || tools[block.id]?.status === "running"),
 	);
 	return waiting || running;
-}
-
-function ReasoningFold({
-	blocks,
-	tools,
-	cwd,
-	settled,
-	waitingToolIds,
-	live,
-	runStartedAt,
-	showActiveStatus = true,
-}: {
-	blocks: ReasoningBlock[];
-	tools: ChatState["tools"];
-	cwd: string;
-	settled: boolean;
-	waitingToolIds: Set<string>;
-	live: boolean;
-	runStartedAt?: number;
-	showActiveStatus?: boolean;
-}) {
-	const [open, setOpen] = useState(false);
-	const [, force] = useState(0);
-	useEffect(() => {
-		if (!live) return;
-		const timer = setInterval(() => force((n) => n + 1), 1000);
-		return () => clearInterval(timer);
-	}, [live]);
-	const label = summarizeReasoning(blocks, tools, waitingToolIds, settled);
-	const steps = reasoningStepCount(blocks);
-	const waiting = blocks.some(
-		(block) => block.type === "toolCall" && waitingToolIds.has(block.id),
-	);
-	const running = blocks.some(
-		(block) =>
-			block.type === "toolCall" &&
-			!waitingToolIds.has(block.id) &&
-			!settled &&
-			(!tools[block.id] || tools[block.id]?.status === "running"),
-	);
-	const active =
-		showActiveStatus &&
-		live &&
-		hasActiveReasoningWork(blocks, tools, waitingToolIds, settled);
-	const seconds =
-		active && runStartedAt ? Math.floor((Date.now() - runStartedAt) / 1000) : 0;
-	return (
-		<div className="fold reasoning-fold">
-			<button
-				type="button"
-				className={`fold-header${active ? " active-thread" : ""}`}
-				onClick={() => setOpen(!open)}
-				aria-expanded={open}
-			>
-				<span className="fold-header-main">
-					<ChevronRight size={14} className={`chev${open ? " open" : ""}`} />
-					<Brain size={14} />
-					<span className="label">{label}</span>
-					<span className="tail">
-						{waiting && !active ? (
-							<span style={{ color: "var(--warning)" }}>Needs approval</span>
-						) : null}
-						{running && !active ? <SpinnerIcon size={14} /> : null}
-						{steps > 1 ? <span>{steps} steps</span> : null}
-					</span>
-				</span>
-				{active && (
-					<span className="fold-header-sub">
-						{waiting ? (
-							<span style={{ color: "var(--warning)" }}>Needs approval</span>
-						) : (
-							<>
-								<SpinnerIcon size={14} />
-								<span>Working{seconds > 2 ? ` · ${seconds}s` : ""}</span>
-							</>
-						)}
-					</span>
-				)}
-			</button>
-			{open && (
-				<div className="reasoning-body">
-					{blocks.map((block, index) => {
-						if (block.type === "thinking") {
-							return (
-								<ReasoningNote
-									key={`thinking:${index}`}
-									text={block.text}
-									redacted={block.redacted}
-								/>
-							);
-						}
-						return (
-							<ToolCard
-								key={block.id || index}
-								block={block}
-								run={tools[block.id]}
-								cwd={cwd}
-								settled={settled}
-								awaitingPermission={waitingToolIds.has(block.id)}
-							/>
-						);
-					})}
-				</div>
-			)}
-		</div>
-	);
-}
-
-function groupDetailBlocks(
-	blocks: Block[],
-): Array<
-	| { key: string; kind: "text"; text: string }
-	| { key: string; kind: "detail"; blocks: ReasoningBlock[]; live: boolean }
-> {
-	const groups: Array<
-		| { key: string; kind: "text"; text: string }
-		| { key: string; kind: "detail"; blocks: ReasoningBlock[]; live: boolean }
-	> = [];
-	let detailStart = -1;
-	let detailBlocks: ReasoningBlock[] = [];
-	const flushDetails = (lastIndex: number) => {
-		if (detailBlocks.length === 0) return;
-		groups.push({
-			key: `detail:${detailStart}`,
-			kind: "detail",
-			blocks: detailBlocks,
-			live: lastIndex === blocks.length - 1,
-		});
-		detailStart = -1;
-		detailBlocks = [];
-	};
-	blocks.forEach((block, index) => {
-		if (block.type === "text") {
-			flushDetails(index - 1);
-			if (block.text.trim())
-				groups.push({ key: `text:${index}`, kind: "text", text: block.text });
-			return;
-		}
-		if (detailStart === -1) detailStart = index;
-		detailBlocks = [...detailBlocks, block];
-	});
-	flushDetails(blocks.length - 1);
-	return groups;
 }
 
 const UserMessage = memo(function UserMessage({
@@ -290,41 +172,114 @@ function assistantDetailBlocks(item: AssistantTranscriptItem): ReasoningBlock[] 
 	);
 }
 
-function AssistantStepDetails({
-	item,
-	tools,
-	cwd,
-	waitingToolIds,
-	runStartedAt,
-}: {
-	item: AssistantTranscriptItem;
-	tools: ChatState["tools"];
-	cwd: string;
-	waitingToolIds: Set<string>;
-	runStartedAt?: number;
-}) {
-	const groups = useMemo(() => groupDetailBlocks(item.blocks), [item.blocks]);
-	return (
-		<>
-			{groups.map((group) => {
-				if (group.kind === "text")
-					return <Markdown key={group.key} text={group.text} />;
-				return (
-					<ReasoningFold
-						key={group.key}
-						blocks={group.blocks}
-						tools={tools}
-						cwd={cwd}
-						settled={!item.streaming}
-						waitingToolIds={waitingToolIds}
-						live={item.streaming && group.live}
-						runStartedAt={runStartedAt}
-						showActiveStatus={false}
-					/>
-				);
-			})}
-		</>
-	);
+const COLLAPSE_MS = 300;
+
+/**
+ * Drives the expand/collapse transition. Contents stay mounted for the length of
+ * the collapse so they can animate out, then unmount to keep long transcripts light.
+ */
+function useCollapseAnimation(open: boolean) {
+	const [mounted, setMounted] = useState(open);
+	const [expanded, setExpanded] = useState(open);
+
+	useEffect(() => {
+		if (open) {
+			setMounted(true);
+			return;
+		}
+		setExpanded(false);
+		const timer = setTimeout(() => setMounted(false), COLLAPSE_MS);
+		return () => clearTimeout(timer);
+	}, [open]);
+
+	// Grow only once the contents are in the DOM, so the transition has a
+	// collapsed frame to animate away from.
+	useEffect(() => {
+		if (!open || !mounted) return;
+		const frame = requestAnimationFrame(() => setExpanded(true));
+		return () => cancelAnimationFrame(frame);
+	}, [open, mounted]);
+
+	return { mounted, expanded };
+}
+
+type ToolCallBlock = Extract<Block, { type: "toolCall" }>;
+
+type TurnNode =
+	| { key: string; kind: "text"; text: string }
+	| {
+			key: string;
+			kind: "thought";
+			title: string | null;
+			body: string;
+			redacted: boolean;
+			live: boolean;
+	  }
+	| { key: string; kind: "tool"; block: ToolCallBlock; settled: boolean };
+
+/**
+ * Flattens a turn into one chronological list. Reasoning collapses per section
+ * while tool calls and prose stay at the top level rather than behind one fold.
+ */
+function flattenTurn(
+	items: AssistantTranscriptItem[],
+	turnActive: boolean,
+): TurnNode[] {
+	const nodes: TurnNode[] = [];
+	for (const item of items) {
+		let pending: string[] = [];
+		let pendingKey = "";
+		const flushText = () => {
+			const text = pending.join("\n\n").trim();
+			pending = [];
+			if (text) nodes.push({ key: pendingKey, kind: "text", text });
+		};
+		item.blocks.forEach((block, index) => {
+			if (block.type === "text") {
+				if (pending.length === 0) pendingKey = `${item.key}:text:${index}`;
+				pending.push(block.text);
+				return;
+			}
+			flushText();
+			if (block.type === "thinking") {
+				// Only a trailing reasoning block is still being written to.
+				const streaming =
+					turnActive && item.streaming && index === item.blocks.length - 1;
+				const sections = splitThoughts(block.text);
+				if (sections.length === 0) {
+					if (!block.redacted) return;
+					nodes.push({
+						key: `${item.key}:thought:${index}`,
+						kind: "thought",
+						title: null,
+						body: "",
+						redacted: true,
+						live: false,
+					});
+					return;
+				}
+				sections.forEach((section, part) => {
+					nodes.push({
+						key: `${item.key}:thought:${index}:${part}`,
+						kind: "thought",
+						title: section.title,
+						body: section.body,
+						redacted: !!block.redacted,
+						live: streaming && part === sections.length - 1,
+					});
+				});
+				return;
+			}
+			nodes.push({
+				key: `${item.key}:tool:${block.id || index}`,
+				kind: "tool",
+				block,
+				settled: !item.streaming,
+			});
+		});
+		flushText();
+	}
+	return nodes;
 }
 
 const AssistantTurn = memo(function AssistantTurn({
@@ -332,7 +287,6 @@ const AssistantTurn = memo(function AssistantTurn({
 	tools,
 	cwd,
 	waitingToolIds,
-	runStartedAt,
 	showFooter,
 	turnActive,
 }: {
@@ -340,7 +294,6 @@ const AssistantTurn = memo(function AssistantTurn({
 	tools: ChatState["tools"];
 	cwd: string;
 	waitingToolIds: Set<string>;
-	runStartedAt?: number;
 	showFooter: boolean;
 	turnActive: boolean;
 }) {
@@ -350,83 +303,37 @@ const AssistantTurn = memo(function AssistantTurn({
 		finalItem.stopReason === "error" ||
 		(finalItem.stopReason === "aborted" && finalItem.errorMessage);
 	const durationLabel = formatThoughtDuration(finalItem.durationMs);
-	const detailItems = items.filter((item) => assistantDetailBlocks(item).length > 0);
-	const latestDetailItem = [...detailItems].reverse().find(Boolean);
-	const latestDetailBlocks = latestDetailItem
-		? assistantDetailBlocks(latestDetailItem)
-		: [];
-	const detailLabel = latestDetailItem
-		? summarizeReasoning(
-				latestDetailBlocks,
-				tools,
-				waitingToolIds,
-				turnActive ? false : !latestDetailItem.streaming,
-			)
-		: null;
-	const totalSteps = detailItems.reduce(
-		(total, item) => total + reasoningStepCount(assistantDetailBlocks(item)),
-		0,
+	const nodes = useMemo(
+		() => flattenTurn(items, turnActive),
+		[items, turnActive],
 	);
-	const waiting = latestDetailBlocks.some(
-		(block) => block.type === "toolCall" && waitingToolIds.has(block.id),
-	);
-	const active =
-		turnActive &&
-		!!latestDetailItem &&
-		hasActiveReasoningWork(latestDetailBlocks, tools, waitingToolIds, false);
-	const [open, setOpen] = useState(false);
-	const [, force] = useState(0);
-	useEffect(() => {
-		if (!active) return;
-		const timer = setInterval(() => force((n) => n + 1), 1000);
-		return () => clearInterval(timer);
-	}, [active]);
-	const seconds =
-		active && runStartedAt ? Math.floor((Date.now() - runStartedAt) / 1000) : 0;
 
 	return (
 		<div className="assistant-msg">
-			{detailLabel && (
-				<div className="fold reasoning-fold assistant-turn-fold">
-					<button
-						type="button"
-						className={`fold-header assistant-turn-header${active ? " is-live shimmer" : ""}`}
-						onClick={() => setOpen(!open)}
-						aria-expanded={open}
-					>
-						<ChevronRight
-							size={14}
-							className={`chev${open ? " open" : ""}`}
+			{nodes.map((node) => {
+				if (node.kind === "text")
+					return <Markdown key={node.key} text={node.text} />;
+				if (node.kind === "thought")
+					return (
+						<ThinkingFold
+							key={node.key}
+							title={node.title}
+							body={node.body}
+							redacted={node.redacted}
+							live={node.live}
 						/>
-						{active && !waiting ? <SpinnerIcon size={16} /> : <Brain size={14} />}
-						<span className="label">{detailLabel}</span>
-						<span className="tail">
-							{waiting ? (
-								<span style={{ color: "var(--warning)" }}>Needs approval</span>
-							) : active ? (
-								<span>{seconds > 2 ? `${seconds}s` : "Working"}</span>
-							) : null}
-							{totalSteps > 1 ? <span>{totalSteps} steps</span> : null}
-						</span>
-					</button>
-					{open && (
-						<div className="reasoning-body assistant-turn-body">
-							{detailItems.map((item) => (
-								<div key={item.key} className="assistant-turn-step">
-									<AssistantStepDetails
-										item={item}
-										tools={tools}
-										cwd={cwd}
-										waitingToolIds={waitingToolIds}
-										runStartedAt={runStartedAt}
-									/>
-								</div>
-							))}
-						</div>
-					)}
-				</div>
-			)}
-			{text && <Markdown text={text} />}
+					);
+				return (
+					<ToolCard
+						key={node.key}
+						block={node.block}
+						run={tools[node.block.id]}
+						cwd={cwd}
+						settled={node.settled}
+						awaitingPermission={waitingToolIds.has(node.block.id)}
+					/>
+				);
+			})}
 			{failed && (
 				<div className="error-card">
 					<strong>
@@ -455,9 +362,16 @@ function BashItem({ item }: { item: Extract<ChatItem, { kind: "bash" }> }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<div className="fold">
-			<button type="button" className="fold-header" onClick={() => setOpen(!open)}>
-				<ChevronRight size={14} className={`chev${open ? " open" : ""}`} />
-				<SquareTerminal size={14} />
+			<button
+				type="button"
+				className="fold-header"
+				onClick={() => setOpen(!open)}
+				aria-expanded={open}
+			>
+				<span className="fold-icon">
+					<SquareTerminal size={14} className="fold-icon-rest" />
+					<ChevronDown size={14} className="fold-icon-chevron" />
+				</span>
 				<span className="label">
 					<code>$ {item.command}</code>
 				</span>
@@ -584,7 +498,6 @@ function renderRow(
 				tools={tab.chat.tools}
 				cwd={tab.cwd}
 				waitingToolIds={waiting}
-				runStartedAt={tab.runStartedAt}
 				showFooter={row.key === latestAssistantTurnKey}
 				turnActive={row.key === latestAssistantTurnKey && tab.isStreaming}
 			/>
