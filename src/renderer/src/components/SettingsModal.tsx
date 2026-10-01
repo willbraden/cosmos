@@ -33,7 +33,7 @@ import {
 	Users,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_THEME_SEEDS } from "@shared/ipc";
 import { api, errorMessage, tildify } from "../lib/api";
 import { contrastRatio } from "../lib/theme-colors";
@@ -231,7 +231,6 @@ function General({
 
 	return (
 		<>
-			<h3>General</h3>
 			<Setting name="Workspace setup" help={agentDir.help}>
 				<div
 					className="setting-control"
@@ -620,8 +619,7 @@ function Providers() {
 
 	return (
 		<>
-			<h3>Model providers</h3>
-			<p className="small-text muted" style={{ marginTop: -8 }}>
+			<p className="small-text muted" style={{ marginTop: 0 }}>
 				Cosmos uses pi's own credentials (<code>auth.json</code>), environment
 				variables, and <code>models.json</code> — anything you set up in the pi CLI
 				works here too.
@@ -1243,8 +1241,7 @@ function Mcps() {
 
 	return (
 		<>
-			<h3>MCP servers</h3>
-			<p className="small-text muted" style={{ marginTop: -8 }}>
+			<p className="small-text muted" style={{ marginTop: 0 }}>
 				Active tools come from Glayvin's merged MCP config. Personal additions are
 				written to your local <code>mcp-config.json</code>.
 			</p>
@@ -1699,8 +1696,7 @@ function Glayvin() {
 
 	return (
 		<>
-			<h3>Glayvin</h3>
-			<p className="small-text muted" style={{ marginTop: -8 }}>
+			<p className="small-text muted" style={{ marginTop: 0 }}>
 				A Glayvin profile turns on a set of packs, and Cosmos inherits their pi
 				packages. Read-only here — switch profiles with{" "}
 				<code>glayvin profile set</code>.
@@ -1879,7 +1875,6 @@ function About() {
 				: "Custom Pi setup";
 	return (
 		<>
-			<h3>About</h3>
 			<Setting name="Cosmos">
 				<span className="muted">{info.appVersion}</span>
 			</Setting>
@@ -2233,7 +2228,6 @@ function Teams() {
 
 	return (
 		<>
-			<h3>Teams</h3>
 			<div className="muted small-text">
 				A team is a shared layer of Glayvin config — packs, profiles, skills and MCP
 				servers. Joining one clones it into your workspace, registers it with Glayvin,
@@ -2385,17 +2379,33 @@ function Teams() {
 	);
 }
 
-const PANES: { id: SettingsPane; label: string; icon: typeof Plug }[] = [
-	{ id: "general", label: "General", icon: SlidersHorizontal },
-	{ id: "providers", label: "Providers", icon: KeyRound },
-	{ id: "teams", label: "Teams", icon: Users },
-	{ id: "mcps", label: "MCPs", icon: Plug },
-	{ id: "glayvin", label: "Glayvin", icon: Layers },
-	{ id: "about", label: "About", icon: Info },
+const PANES: {
+	id: SettingsPane;
+	label: string;
+	title: string;
+	icon: typeof Plug;
+}[] = [
+	{
+		id: "general",
+		label: "General",
+		title: "General",
+		icon: SlidersHorizontal,
+	},
+	{
+		id: "providers",
+		label: "Providers",
+		title: "Model providers",
+		icon: KeyRound,
+	},
+	{ id: "teams", label: "Teams", title: "Teams", icon: Users },
+	{ id: "mcps", label: "MCPs", title: "MCP servers", icon: Plug },
+	{ id: "glayvin", label: "Glayvin", title: "Glayvin", icon: Layers },
+	{ id: "about", label: "About", title: "About", icon: Info },
 ];
 
 export function SettingsModal({ pane }: { pane: SettingsPane }) {
 	const settings = useStore((s) => s.settings);
+	const bodyRef = useRef<HTMLDivElement>(null);
 	const close = () => useStore.setState({ settingsPane: null });
 	const update = (patch: Partial<DesktopSettings>) => {
 		void api
@@ -2410,6 +2420,10 @@ export function SettingsModal({ pane }: { pane: SettingsPane }) {
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	});
+
+	useEffect(() => {
+		bodyRef.current?.scrollTo({ top: 0 });
+	}, [pane]);
 
 	return (
 		<div
@@ -2431,9 +2445,8 @@ export function SettingsModal({ pane }: { pane: SettingsPane }) {
 					))}
 				</div>
 				<div className="modal-content">
-					<div
-						style={{ display: "flex", justifyContent: "flex-end", marginBottom: -30 }}
-					>
+					<div className="modal-content-header">
+						<h3>{PANES.find((p) => p.id === pane)?.title ?? "Settings"}</h3>
 						<button
 							type="button"
 							className="icon-btn"
@@ -2443,12 +2456,14 @@ export function SettingsModal({ pane }: { pane: SettingsPane }) {
 							<X size={16} />
 						</button>
 					</div>
-					{pane === "general" && <General settings={settings} update={update} />}
-					{pane === "providers" && <Providers />}
-					{pane === "teams" && <Teams />}
-					{pane === "mcps" && <Mcps />}
-					{pane === "glayvin" && <Glayvin />}
-					{pane === "about" && <About />}
+					<div className="modal-content-body" ref={bodyRef}>
+						{pane === "general" && <General settings={settings} update={update} />}
+						{pane === "providers" && <Providers />}
+						{pane === "teams" && <Teams />}
+						{pane === "mcps" && <Mcps />}
+						{pane === "glayvin" && <Glayvin />}
+						{pane === "about" && <About />}
+					</div>
 				</div>
 			</div>
 		</div>
