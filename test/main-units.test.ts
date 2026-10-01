@@ -43,9 +43,11 @@ import {
 } from "../src/main/team-discovery";
 import {
 	inferGlayvinHomeFromAgentDir,
+	isDirectory,
 	readDisabledTeamNames,
 	readGlayvinTeams,
 	readRegisteredTeamNames,
+	readRegisteredTeams,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
 import { getGlayvinProfileOverview } from "../src/main/glayvin-profile";
@@ -2163,6 +2165,62 @@ describe("reading Glayvin team state", () => {
 		});
 		expect(readGlayvinTeams(dir).map((t) => t.name)).toEqual(["absolute"]);
 		expect(readRegisteredTeamNames(dir)).toEqual(["absolute", "relative"]);
+	});
+
+	it("derives every team reader from one read of the two config files", () => {
+		const dir = home({
+			"glayvin.json": JSON.stringify({
+				teams: [
+					{ name: "active", path: "/tmp/active" },
+					{ name: "off", path: "/tmp/off" },
+					{ name: "relative", path: "./team" },
+					{ name: "pathless" },
+				],
+			}),
+			"disabled.json": JSON.stringify({ teams: ["off"] }),
+		});
+		expect(readRegisteredTeams(dir)).toEqual([
+			{ name: "active", path: "/tmp/active", absolute: true, enabled: true },
+			{ name: "off", path: "/tmp/off", absolute: true, enabled: false },
+			{ name: "relative", path: "./team", absolute: false, enabled: true },
+			{ name: "pathless", path: "", absolute: false, enabled: true },
+		]);
+		// The narrower readers are views over the same rows, so they cannot disagree.
+		expect(readGlayvinTeams(dir).map((t) => t.name)).toEqual(["active", "off"]);
+		expect(readRegisteredTeamNames(dir)).toEqual([
+			"active",
+			"off",
+			"relative",
+			"pathless",
+		]);
+	});
+
+	it("rejects a file sitting where a team directory should be", () => {
+		const dir = mkdtempSync(join(tmpdir(), "gv-kind-"));
+		const asFile = join(dir, "stray");
+		writeFileSync(asFile, "");
+		const asDir = join(dir, "real");
+		mkdirSync(asDir);
+
+		// The resolver tests team paths with existsSync, which accepts both.
+		expect(existsSync(asFile)).toBe(true);
+		expect(isDirectory(asFile)).toBe(false);
+		expect(isDirectory(asDir)).toBe(true);
+	});
+
+	it("calls a team with a file at its path missing, not active", () => {
+		const dir = mkdtempSync(join(tmpdir(), "gv-stray-"));
+		const asFile = join(dir, "stray");
+		writeFileSync(asFile, "");
+		const teams = [{ name: "stray", path: asFile }];
+		// No `exists` override, so this exercises the real default.
+		const context = { disabled: [], registered: ["stray"] };
+
+		expect(resolveMembership("stray", asFile, teams, context)?.state).toBe(
+			"missing",
+		);
+		// And it occupies no precedence slot, matching readEnabledTeamDirs.
+		expect(effectivePrecedence(teams, context).size).toBe(0);
 	});
 });
 

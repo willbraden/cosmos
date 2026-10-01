@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { DesktopSettings } from "../shared/ipc";
@@ -45,34 +45,72 @@ export function resolveGlayvinHomePath(
 }
 
 /**
+ * Whether a path is usable as a layer root. The resolver tests registered teams
+ * with `existsSync`, which also accepts a plain file sitting at the path; a file
+ * is not a layer, so this rejects it.
+ */
+export function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/** A registered team and the state Glayvin's two config files put it in. */
+export interface RegisteredTeam extends GlayvinTeam {
+	/** `false` for repo-relative paths, which cannot be resolved from here. */
+	absolute: boolean;
+	/** Not listed under `teams` in disabled.json. Says nothing about the path. */
+	enabled: boolean;
+}
+
+/**
+ * The single read of the two files that define team state: `.local/glayvin.json`
+ * registers teams in precedence order, `.local/disabled.json` switches them off
+ * by name. Every other team reader here derives from this one, so the panes
+ * cannot drift apart on what counts as a team.
+ *
+ * Entries with an unusable path keep an empty `path` rather than being dropped —
+ * they are still memberships, and callers that only need names depend on seeing
+ * them.
+ */
+export function readRegisteredTeams(
+	glayvinHome: string | undefined,
+): RegisteredTeam[] {
+	const config = readLocalJson(glayvinHome, "glayvin.json") as
+		| { teams?: unknown }
+		| undefined;
+	const teams = config?.teams;
+	if (!Array.isArray(teams)) return [];
+	const disabledNames = new Set(readDisabledTeamNames(glayvinHome));
+	return teams.flatMap((entry) => {
+		const rawName = (entry as GlayvinTeam)?.name;
+		if (typeof rawName !== "string" || !rawName.trim()) return [];
+		const name = rawName.trim();
+		const rawPath = (entry as GlayvinTeam)?.path;
+		const path = typeof rawPath === "string" && rawPath.trim() ? rawPath : "";
+		return [
+			{
+				name,
+				path,
+				absolute: Boolean(path) && isAbsolute(path),
+				enabled: !disabledNames.has(name),
+			},
+		];
+	});
+}
+
+/**
  * Teams registered in the user's Glayvin config. Relative paths are repo-relative
  * and cannot be resolved from here, so only absolute entries are returned.
  */
 export function readGlayvinTeams(
 	glayvinHome: string | undefined,
 ): GlayvinTeam[] {
-	if (!glayvinHome) return [];
-	try {
-		const raw = readFileSync(
-			join(glayvinHome, ".local", "glayvin.json"),
-			"utf8",
-		);
-		const parsed = JSON.parse(raw) as unknown;
-		const teams = (parsed as { teams?: unknown })?.teams;
-		if (!Array.isArray(teams)) return [];
-		return teams.flatMap((entry) => {
-			const name = (entry as GlayvinTeam)?.name;
-			const path = (entry as GlayvinTeam)?.path;
-			return typeof name === "string" &&
-				name.trim() &&
-				typeof path === "string" &&
-				isAbsolute(path)
-				? [{ name: name.trim(), path }]
-				: [];
-		});
-	} catch {
-		return [];
-	}
+	return readRegisteredTeams(glayvinHome)
+		.filter((team) => team.absolute)
+		.map((team) => ({ name: team.name, path: team.path }));
 }
 
 function readLocalJson(
@@ -113,13 +151,5 @@ export function readDisabledTeamNames(
 export function readRegisteredTeamNames(
 	glayvinHome: string | undefined,
 ): string[] {
-	const parsed = readLocalJson(glayvinHome, "glayvin.json") as
-		| { teams?: unknown }
-		| undefined;
-	const teams = parsed?.teams;
-	if (!Array.isArray(teams)) return [];
-	return teams.flatMap((entry) => {
-		const name = (entry as GlayvinTeam)?.name;
-		return typeof name === "string" && name.trim() ? [name.trim()] : [];
-	});
+	return readRegisteredTeams(glayvinHome).map((team) => team.name);
 }

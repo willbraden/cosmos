@@ -1,7 +1,12 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import {
+	isDirectory,
+	type RegisteredTeam,
+	readRegisteredTeams,
+} from "./glayvin-runtime";
 import type {
 	GlayvinPackLayer,
 	GlayvinPackageSummary,
@@ -112,14 +117,6 @@ function optionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function isDirectory(path: string): boolean {
-	try {
-		return statSync(path).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
 /** Lists the manifest ids in a `packs/` or `profiles/` directory. */
 function listManifestIds(dir: string): string[] {
 	try {
@@ -150,30 +147,6 @@ function toStatus(value: unknown): GlayvinPackStatus {
 	return value === "effective" || value === "available" || value === "disabled"
 		? value
 		: "unknown";
-}
-
-interface RegisteredTeam {
-	name: string;
-	path: string;
-	enabled: boolean;
-}
-
-/**
- * Reads registered teams and their enabled state.
- *
- * Mirrors the resolver's `readEnabledTeamDirs`: teams come from `.local/glayvin.json`,
- * and a name listed under `teams` in `.local/disabled.json` contributes nothing.
- */
-function readTeams(glayvinHome: string): RegisteredTeam[] {
-	const config = readJsonObject(join(glayvinHome, ".local", "glayvin.json"));
-	const disabled = readJsonObject(join(glayvinHome, ".local", "disabled.json"));
-	const disabledNames = new Set(toStringArray(disabled?.teams));
-	return toRecordArray(config?.teams).flatMap((team) => {
-		const name = optionalString(team.name);
-		const path = optionalString(team.path);
-		if (!name || !path) return [];
-		return [{ name, path, enabled: !disabledNames.has(name) }];
-	});
 }
 
 function readTeamContributions(teamPath: string): GlayvinTeamContributions {
@@ -442,7 +415,9 @@ export async function getGlayvinProfileOverview(
 		);
 	}
 
-	const registeredTeams = readTeams(glayvinHome);
+	const registeredTeams = readRegisteredTeams(glayvinHome).filter(
+		(team) => team.path,
+	);
 	const teams: GlayvinTeamSummary[] = registeredTeams.map((team) => ({
 		name: team.name,
 		path: team.path,
