@@ -1165,58 +1165,93 @@ select {
 	);
 }
 
-.custom-spinner-icon .outer,
-.custom-spinner-icon .inner {
-	stroke: currentColor;
+.custom-spinner-icon .moon-earthshine {
+	/* Sits just off the surface — enough to hold the disc through the new moon
+	   without reading as a second grey object. */
+	opacity: var(--moon-shade, 0.06);
 }
 
-.custom-spinner-icon .outer {
-	fill: none;
-	animation: active-spinner-outer 1.5s linear infinite;
+.custom-spinner-icon .moon-phase {
+	transform-box: view-box;
+	transform-origin: 0 0;
+	animation-duration: var(--moon-cycle, 4s);
+	animation-timing-function: linear;
+	animation-iteration-count: infinite;
 }
 
-.custom-spinner-icon .inner {
-	fill: currentColor;
-	animation: active-spinner-inner 1.5s linear infinite;
+.custom-spinner-icon .lit-left {
+	animation-name: moon-lit-left;
 }
 
-@keyframes active-spinner-outer {
+.custom-spinner-icon .lit-right {
+	animation-name: moon-lit-right;
+}
+
+.custom-spinner-icon .dark-left {
+	animation-name: moon-dark-left;
+}
+
+.custom-spinner-icon .dark-right {
+	animation-name: moon-dark-right;
+}
+
+/* The two mirrored halves each wipe in and out a quarter-cycle apart, which
+   walks the moon through new, first quarter, full, last quarter and back. */
+@keyframes moon-lit-left {
 	0% {
-		animation-timing-function: linear;
-		stroke-width: 2px;
+		transform: translate(5.423px, 5.423px) scaleX(1) translate(-5.423px, -5.423px);
 	}
-	14.67% {
-		animation-timing-function: ease-in-out;
-		stroke-width: 2px;
+	50% {
+		animation-timing-function: ease-in;
+		transform: translate(5.423px, 5.423px) scaleX(1) translate(-5.423px, -5.423px);
 	}
-	32.01% {
-		animation-timing-function: ease-in-out;
-		stroke-width: 4px;
+	75%,
+	100% {
+		transform: translate(5.423px, 5.423px) scaleX(0) translate(-5.423px, -5.423px);
 	}
-	49.36% {
-		animation-timing-function: linear;
-		stroke-width: 2px;
+}
+
+@keyframes moon-lit-right {
+	0% {
+		transform: translateX(10.827px) translate(-5.404px, 5.423px) scaleX(0)
+			translate(5.404px, -5.423px) rotate(3.142rad) scaleY(-1);
+	}
+	25% {
+		animation-timing-function: ease-out;
+		transform: translateX(10.827px) translate(-5.404px, 5.423px) scaleX(0)
+			translate(5.404px, -5.423px) rotate(3.142rad) scaleY(-1);
+	}
+	50%,
+	100% {
+		transform: translateX(10.827px) translate(-5.404px, 5.423px) scaleX(1)
+			translate(5.404px, -5.423px) rotate(3.142rad) scaleY(-1);
+	}
+}
+
+@keyframes moon-dark-left {
+	0% {
+		animation-timing-function: ease-in;
+		transform: translate(5.423px, 5.423px) scaleX(1) translate(-5.423px, -5.423px);
+	}
+	25%,
+	100% {
+		transform: translate(5.423px, 5.423px) scaleX(0) translate(-5.423px, -5.423px);
+	}
+}
+
+@keyframes moon-dark-right {
+	0% {
+		transform: translateX(10.827px) translate(-5.404px, 5.423px) scaleX(0)
+			translate(5.404px, -5.423px) rotate(3.142rad) scaleY(-1);
+	}
+	75% {
+		animation-timing-function: ease-out;
+		transform: translateX(10.827px) translate(-5.404px, 5.423px) scaleX(0)
+			translate(5.404px, -5.423px) rotate(3.142rad) scaleY(-1);
 	}
 	100% {
-		stroke-width: 2px;
-	}
-}
-
-@keyframes active-spinner-inner {
-	0% {
-		animation-timing-function: ease-in-out;
-		stroke-width: 2px;
-	}
-	14.67% {
-		animation-timing-function: ease-in-out;
-		stroke-width: 4px;
-	}
-	33.33% {
-		animation-timing-function: linear;
-		stroke-width: 2px;
-	}
-	100% {
-		stroke-width: 2px;
+		transform: translateX(10.827px) translate(-5.404px, 5.423px) scaleX(1)
+			translate(5.404px, -5.423px) rotate(3.142rad) scaleY(-1);
 	}
 }
 
@@ -1252,6 +1287,30 @@ select {
 	.thinking-reveal,
 	.thinking-header .fold-icon > * {
 		transition: none;
+	}
+
+	/* Drop the travelling terminator for a steady pulse. No motion across the
+	   icon, but it still reads as active rather than frozen. */
+	.custom-spinner-icon .moon-phase {
+		animation: none;
+	}
+
+	.custom-spinner-icon rect {
+		display: none;
+	}
+
+	.custom-spinner-icon .moon-earthshine {
+		animation: moon-reduced-pulse 1.8s ease-in-out infinite;
+	}
+}
+
+@keyframes moon-reduced-pulse {
+	0%,
+	100% {
+		opacity: 0.3;
+	}
+	50% {
+		opacity: 1;
 	}
 }
 
