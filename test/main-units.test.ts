@@ -8,7 +8,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ app: {}, shell: {} }));
@@ -17,7 +17,10 @@ vi.mock("electron-log/main", () => ({
 }));
 
 import * as bridge from "../resources/pi-extension/desktop-bridge";
-import { ensureCosmosManagedAgentDir } from "../src/main/agent-home";
+import {
+	ensureCosmosManagedAgentDir,
+	mergeManagedPackages,
+} from "../src/main/agent-home";
 import { fuzzyScore } from "../src/main/files";
 import {
 	type CommandResult,
@@ -45,6 +48,7 @@ import {
 	readRegisteredTeamNames,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
+import { getGlayvinProfileOverview } from "../src/main/glayvin-profile";
 import {
 	managedWorktreeRoot,
 	planManagedWorktree,
@@ -237,6 +241,594 @@ describe("cosmos managed agent home", () => {
 			"npm:pi-lens@4.0.0",
 			{ source: cosmosPackage },
 		]);
+	});
+});
+
+describe("managed package merge", () => {
+	const COSMOS = "/apps/cosmos-package";
+
+	it("drops packages the seed no longer lists", () => {
+		const merged = mergeManagedPackages(
+			["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"],
+			COSMOS,
+			{ packages: ["npm:pi-lens@4.0.0"] },
+			["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"],
+		);
+		expect(merged.packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			{ source: COSMOS },
+		]);
+		expect(merged.seedSources).toEqual(["npm:pi-lens@4.0.0"]);
+	});
+
+	it("keeps user-added packages that never came from the seed", () => {
+		const merged = mergeManagedPackages(
+			["npm:pi-lens@4.0.0", "npm:my-own-package@1.0.0"],
+			COSMOS,
+			{ packages: [] },
+			["npm:pi-lens@4.0.0"],
+		);
+		expect(merged.packages).toEqual([
+			"npm:my-own-package@1.0.0",
+			{ source: COSMOS },
+		]);
+		expect(merged.seedSources).toEqual([]);
+	});
+
+	it("replaces a seeded package when the seed bumps its version", () => {
+		const merged = mergeManagedPackages(
+			["npm:pi-lens@4.0.0"],
+			COSMOS,
+			{ packages: ["npm:pi-lens@4.1.0"] },
+			["npm:pi-lens@4.0.0"],
+		);
+		expect(merged.packages).toEqual([
+			"npm:pi-lens@4.1.0",
+			{ source: COSMOS },
+		]);
+	});
+
+	it("filters the external permission system and keeps it out of the ledger", () => {
+		const merged = mergeManagedPackages(
+			[
+				"npm:@gotgenes/pi-permission-system@23.0.0",
+				{ source: "npm:pi-lens@4.0.0" },
+			],
+			COSMOS,
+			{
+				packages: [
+					"npm:@gotgenes/pi-permission-system@24.0.0",
+					"npm:pi-subagents@0.45.2",
+				],
+			},
+		);
+		expect(merged.packages).toEqual([
+			"npm:pi-subagents@0.45.2",
+			{ source: "npm:pi-lens@4.0.0" },
+			{ source: COSMOS },
+		]);
+		expect(merged.seedSources).toEqual(["npm:pi-subagents@0.45.2"]);
+	});
+
+	it("appends the bundled cosmos package last exactly once", () => {
+		const merged = mergeManagedPackages(
+			[{ source: COSMOS }, "npm:pi-lens@4.0.0"],
+			COSMOS,
+			{ packages: ["npm:pi-lens@4.0.0"] },
+		);
+		expect(merged.packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			{ source: COSMOS },
+		]);
+		expect(
+			merged.packages.filter(
+				(entry) =>
+					typeof entry === "object" &&
+					(entry as { source?: string }).source === COSMOS,
+			),
+		).toHaveLength(1);
+	});
+
+	it("removes nothing and preserves the ledger when no seed was read", () => {
+		const merged = mergeManagedPackages(
+			["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"],
+			COSMOS,
+			undefined,
+			["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"],
+		);
+		expect(merged.packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			"npm:pi-context@2.1.2",
+			{ source: COSMOS },
+		]);
+		expect(merged.seedSources).toEqual([
+			"npm:pi-lens@4.0.0",
+			"npm:pi-context@2.1.2",
+		]);
+	});
+
+	it("removes nothing when there is no ledger yet", () => {
+		const merged = mergeManagedPackages(
+			["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"],
+			COSMOS,
+			{ packages: ["npm:pi-lens@4.0.0"] },
+		);
+		expect(merged.packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			"npm:pi-context@2.1.2",
+			{ source: COSMOS },
+		]);
+		expect(merged.seedSources).toEqual(["npm:pi-lens@4.0.0"]);
+	});
+
+	it("matches object-form and string-form entries for the same source", () => {
+		const merged = mergeManagedPackages(
+			[{ source: "npm:pi-lens@4.0.0" }],
+			COSMOS,
+			{ packages: [] },
+			["npm:pi-lens@4.0.0"],
+		);
+		expect(merged.packages).toEqual([{ source: COSMOS }]);
+	});
+
+	it("normalizes relative local paths before comparing", () => {
+		const merged = mergeManagedPackages(
+			[{ source: "./local-pkg" }],
+			COSMOS,
+			{ packages: [] },
+			[resolve("./local-pkg")],
+		);
+		expect(merged.packages).toEqual([{ source: COSMOS }]);
+	});
+});
+
+describe("managed agent marker ledger", () => {
+	function setup() {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-managed-ledger-"));
+		const userData = join(root, "user-data");
+		const seed = join(root, "seed-agent");
+		const cosmosPackage = join(root, "cosmos-package");
+		mkdirSync(seed, { recursive: true });
+		mkdirSync(cosmosPackage, { recursive: true });
+		const writeSeed = (packages: string[]) =>
+			writeFileSync(
+				join(seed, "settings.json"),
+				JSON.stringify({ defaultProvider: "github-copilot", packages }),
+			);
+		const readManaged = (dir: string, file: string) =>
+			JSON.parse(readFileSync(join(dir, file), "utf8")) as Record<
+				string,
+				unknown
+			>;
+		return { userData, seed, cosmosPackage, writeSeed, readManaged };
+	}
+
+	it("writes a versioned ledger on first run", () => {
+		const { userData, seed, cosmosPackage, writeSeed, readManaged } = setup();
+		writeSeed(["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"]);
+		const managed = ensureCosmosManagedAgentDir(
+			userData,
+			[seed],
+			cosmosPackage,
+		);
+		const marker = readManaged(managed, ".cosmos-managed.json");
+		expect(marker.version).toBe(3);
+		expect(marker.seedPackages).toEqual([
+			"npm:pi-lens@4.0.0",
+			"npm:pi-context@2.1.2",
+		]);
+	});
+
+	it("drops a package once the seed stops listing it", () => {
+		const { userData, seed, cosmosPackage, writeSeed, readManaged } = setup();
+		writeSeed(["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"]);
+		ensureCosmosManagedAgentDir(userData, [seed], cosmosPackage);
+		writeSeed(["npm:pi-lens@4.0.0"]);
+		const managed = ensureCosmosManagedAgentDir(
+			userData,
+			[seed],
+			cosmosPackage,
+		);
+		const settings = readManaged(managed, "settings.json");
+		expect(settings.packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			{ source: cosmosPackage },
+		]);
+	});
+
+	it("removes nothing on the first run after migrating a v1 marker", () => {
+		const { userData, seed, cosmosPackage, writeSeed, readManaged } = setup();
+		writeSeed(["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"]);
+		const managed = ensureCosmosManagedAgentDir(
+			userData,
+			[seed],
+			cosmosPackage,
+		);
+		// Rewind to the shipped v1 marker shape, which carries no ledger.
+		writeFileSync(
+			join(managed, ".cosmos-managed.json"),
+			JSON.stringify({
+				version: 1,
+				managedBy: "Cosmos",
+				seededFrom: seed,
+				copied: ["auth.json"],
+				createdAt: "2026-09-27T06:34:55.042Z",
+			}),
+		);
+		writeSeed(["npm:pi-lens@4.0.0"]);
+		ensureCosmosManagedAgentDir(userData, [seed], cosmosPackage);
+		expect(readManaged(managed, "settings.json").packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			"npm:pi-context@2.1.2",
+			{ source: cosmosPackage },
+		]);
+		const marker = readManaged(managed, ".cosmos-managed.json");
+		expect(marker.version).toBe(3);
+		expect(marker.seedPackages).toEqual(["npm:pi-lens@4.0.0"]);
+		expect(marker.createdAt).toBe("2026-09-27T06:34:55.042Z");
+		expect(marker.copied).toEqual(["auth.json"]);
+	});
+
+	it("subtracts on the launch after the ledger is established", () => {
+		const { userData, seed, cosmosPackage, writeSeed, readManaged } = setup();
+		writeSeed(["npm:pi-lens@4.0.0", "npm:pi-context@2.1.2"]);
+		const managed = ensureCosmosManagedAgentDir(
+			userData,
+			[seed],
+			cosmosPackage,
+		);
+		writeSeed(["npm:pi-lens@4.0.0"]);
+		ensureCosmosManagedAgentDir(userData, [seed], cosmosPackage);
+		expect(readManaged(managed, "settings.json").packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			{ source: cosmosPackage },
+		]);
+	});
+
+	it("keeps seeded packages when the seed disappears", () => {
+		const { userData, seed, cosmosPackage, writeSeed, readManaged } = setup();
+		writeSeed(["npm:pi-lens@4.0.0"]);
+		const managed = ensureCosmosManagedAgentDir(
+			userData,
+			[seed],
+			cosmosPackage,
+		);
+		ensureCosmosManagedAgentDir(userData, [join(seed, "missing")], cosmosPackage);
+		expect(readManaged(managed, "settings.json").packages).toEqual([
+			"npm:pi-lens@4.0.0",
+			{ source: cosmosPackage },
+		]);
+		expect(readManaged(managed, ".cosmos-managed.json").seedPackages).toEqual([
+			"npm:pi-lens@4.0.0",
+		]);
+	});
+});
+
+describe("glayvin profile overview", () => {
+	const noResolver = async () => undefined;
+
+	function setup() {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-glayvin-profile-"));
+		const glayvinHome = join(root, ".glayvin");
+		mkdirSync(join(glayvinHome, ".local"), { recursive: true });
+		mkdirSync(join(glayvinHome, "config", "packs"), { recursive: true });
+		const write = (path: string, value: unknown) => {
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, JSON.stringify(value));
+		};
+		return { root, glayvinHome, write };
+	}
+
+	/** A home with the `default` profile resolving to core + the context pack core includes. */
+	function setupDefaultProfile() {
+		const fixture = setup();
+		const { glayvinHome, write } = fixture;
+		write(join(glayvinHome, "config", "profiles", "default.json"), {
+			id: "default",
+			packs: ["core"],
+		});
+		write(join(glayvinHome, "config", "packs", "core.json"), {
+			id: "core",
+			description: "Core runtime",
+			includes: ["context"],
+		});
+		write(join(glayvinHome, "config", "packs", "context.json"), {
+			id: "context",
+		});
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "default",
+			packs: ["core", "context"],
+			packages: [{ name: "pi-lens", version: "4.0.0", owner: "core" }],
+		});
+		return fixture;
+	}
+
+	it("reports unavailable without a glayvin home", async () => {
+		const overview = await getGlayvinProfileOverview(undefined, noResolver);
+		expect(overview.available).toBe(false);
+		expect(overview.packs).toEqual([]);
+		expect(overview.notes.length).toBeGreaterThan(0);
+	});
+
+	it("reports unavailable when the profile has not been resolved", async () => {
+		const { glayvinHome } = setup();
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(overview.available).toBe(false);
+		expect(overview.resolvedPath).toBe(
+			join(glayvinHome, ".local", "resolved.json"),
+		);
+		expect(overview.notes.join(" ")).toContain("has not resolved a profile");
+	});
+
+	it("degrades instead of throwing on malformed resolved.json", async () => {
+		const { glayvinHome } = setup();
+		writeFileSync(join(glayvinHome, ".local", "resolved.json"), "{ not json");
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(overview.available).toBe(false);
+		expect(overview.notes.join(" ")).toContain("Could not parse");
+	});
+
+	it("lists every pack the resolver knows about, not just the active ones", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, async (_home, args) =>
+			args[0] === "packs"
+				? {
+						packs: [
+							{
+								id: "core",
+								source: "built-in",
+								status: "effective",
+								via: "profile",
+								description: "Core runtime",
+							},
+							{
+								id: "context",
+								source: "built-in",
+								status: "effective",
+								via: "includes",
+							},
+							{ id: "vision", source: "built-in", status: "available" },
+							{ id: "noisy", source: "built-in", status: "disabled" },
+						],
+					}
+				: {
+						profiles: [
+							{
+								id: "default",
+								source: "built-in",
+								active: true,
+								description: "Default profile",
+							},
+							{ id: "minimal", source: "built-in", active: false },
+						],
+					},
+		);
+
+		expect(overview.source).toBe("resolver");
+		expect(overview.packs.map((pack) => [pack.id, pack.status])).toEqual([
+			["core", "effective"],
+			["context", "effective"],
+			["vision", "available"],
+			["noisy", "disabled"],
+		]);
+		expect(overview.profiles).toEqual([
+			{
+				id: "default",
+				layer: "built-in",
+				description: "Default profile",
+				active: true,
+				packIds: ["core"],
+			},
+			{
+				id: "minimal",
+				layer: "built-in",
+				description: undefined,
+				active: false,
+				packIds: [],
+			},
+		]);
+		expect(overview.packages).toEqual([
+			{
+				name: "pi-lens",
+				version: "4.0.0",
+				pack: "core",
+				excludedByCosmos: false,
+			},
+		]);
+	});
+
+	it("flags a pack the profile never named as implicit, with the resolver's reason", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, async (_home, args) =>
+			args[0] === "packs"
+				? {
+						packs: [
+							{
+								id: "core",
+								source: "built-in",
+								status: "effective",
+								via: "profile",
+							},
+							{
+								id: "context",
+								source: "built-in",
+								status: "effective",
+								via: "includes",
+							},
+							{ id: "vision", source: "built-in", status: "available" },
+						],
+					}
+				: { profiles: [] },
+		);
+
+		expect(overview.packs.map((pack) => [pack.id, pack.implicit, pack.via]))
+			.toEqual([
+				["core", false, "profile"],
+				["context", true, "includes"],
+				// Only effective packs can be implicit.
+				["vision", false, undefined],
+			]);
+	});
+
+	it("treats only pack-pulled reasons as implicit, not hand-enabled ones", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(
+			glayvinHome,
+			async (_home, args) =>
+				args[0] === "packs"
+					? {
+							packs: [
+								// Neither is named by the profile, so a diff against the
+								// profile's packs[] would call both implicit.
+								{
+									id: "vision",
+									source: "built-in",
+									status: "effective",
+									via: "enabledPacks",
+								},
+								{
+									id: "graphify",
+									source: "built-in",
+									status: "effective",
+									via: "requires:builder",
+								},
+							],
+						}
+					: { profiles: [] },
+		);
+
+		expect(overview.packs.map((pack) => [pack.id, pack.implicit])).toEqual([
+			["vision", false],
+			["graphify", true],
+		]);
+	});
+
+	it("falls back to resolved.json when the resolver cannot run", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+
+		expect(overview.source).toBe("files");
+		expect(overview.available).toBe(true);
+		expect(overview.packs.map((pack) => [pack.id, pack.layer, pack.implicit]))
+			.toEqual([
+				["core", "built-in", false],
+				["context", "built-in", true],
+			]);
+		expect(overview.packs[0].description).toBe("Core runtime");
+		expect(overview.profiles).toEqual([
+			{ id: "default", layer: "built-in", active: true, packIds: ["core"] },
+		]);
+		expect(overview.notes.join(" ")).toContain("resolver could not be run");
+	});
+
+	it("falls back when the resolver returns unusable output", async () => {
+		const { glayvinHome } = setupDefaultProfile();
+		const overview = await getGlayvinProfileOverview(glayvinHome, async () => ({
+			packs: "not-an-array",
+		}));
+		expect(overview.source).toBe("files");
+		expect(overview.packs.map((pack) => pack.id)).toEqual(["core", "context"]);
+	});
+
+	it("attributes packs to the highest-precedence layer that has them", async () => {
+		const { root, glayvinHome, write } = setup();
+		const teamA = join(root, "team-a");
+		const teamB = join(root, "team-b");
+		write(join(glayvinHome, ".local", "glayvin.json"), {
+			teams: [
+				{ name: "team-a", path: teamA },
+				{ name: "team-b", path: teamB },
+			],
+		});
+		write(join(glayvinHome, "config", "packs", "debug.json"), { id: "debug" });
+		write(join(teamA, "packs", "debug.json"), { id: "debug" });
+		write(join(teamB, "packs", "debug.json"), { id: "debug" });
+		write(join(glayvinHome, ".local", "glayvin", "packs", "scratch.json"), {
+			id: "scratch",
+			description: "Personal scratch pack",
+		});
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "default",
+			packs: ["debug", "scratch", "ghost"],
+		});
+
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(
+			overview.packs.map((pack) => [pack.id, pack.layer, pack.teamName]),
+		).toEqual([
+			// The later-registered team wins.
+			["debug", "team", "team-b"],
+			["scratch", "local", undefined],
+			["ghost", "unknown", undefined],
+		]);
+		expect(overview.notes.join(" ")).toContain("could not be traced to a layer");
+	});
+
+	it("ignores packs from a disabled team", async () => {
+		const { root, glayvinHome, write } = setup();
+		const team = join(root, "team-a");
+		write(join(glayvinHome, ".local", "glayvin.json"), {
+			teams: [{ name: "team-a", path: team }],
+		});
+		write(join(glayvinHome, ".local", "disabled.json"), { teams: ["team-a"] });
+		write(join(team, "packs", "debug.json"), { id: "debug" });
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "default",
+			packs: ["debug"],
+		});
+
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(overview.teams[0].enabled).toBe(false);
+		expect(overview.packs[0].layer).toBe("unknown");
+	});
+
+	it("reports what each registered team contributes", async () => {
+		const { root, glayvinHome, write } = setup();
+		const team = join(root, "cosmos-ai");
+		write(join(glayvinHome, ".local", "glayvin.json"), {
+			teams: [{ name: "cosmos-ai", path: team }],
+		});
+		write(join(team, "mcp-config.json"), {
+			mcpServers: { figma: {}, sentry: {} },
+		});
+		mkdirSync(join(team, "skills", "defuddle"), { recursive: true });
+		mkdirSync(join(team, "skills", "triage"), { recursive: true });
+		writeFileSync(join(team, "copilot-instructions.md"), "team context");
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "default",
+			packs: [],
+		});
+
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(overview.teams).toEqual([
+			{
+				name: "cosmos-ai",
+				path: team,
+				exists: true,
+				enabled: true,
+				contributes: {
+					packIds: [],
+					profileIds: [],
+					mcpServerNames: ["figma", "sentry"],
+					skillCount: 2,
+					hasInstructions: true,
+				},
+			},
+		]);
+	});
+
+	it("flags registered teams whose directories are gone", async () => {
+		const { root, glayvinHome, write } = setup();
+		write(join(glayvinHome, ".local", "glayvin.json"), {
+			teams: [{ name: "stale", path: join(root, "missing") }],
+		});
+		write(join(glayvinHome, ".local", "resolved.json"), {
+			profile: "minimal",
+			packs: [],
+		});
+		const overview = await getGlayvinProfileOverview(glayvinHome, noResolver);
+		expect(overview.teams[0]).toMatchObject({ name: "stale", exists: false });
+		expect(overview.notes.join(" ")).toContain("no longer exist");
 	});
 });
 

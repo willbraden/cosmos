@@ -88,7 +88,7 @@ export interface AppInfo {
 	agentDir: string;
 	glayvinHome?: string;
 	workspaceRoot: string;
-	profileSource: "cosmos-managed" | "glayvin" | "custom";
+	agentDirSource: "cosmos-managed" | "glayvin" | "custom";
 	logPath: string;
 }
 
@@ -161,6 +161,85 @@ export interface McpConfigOverview {
 	personalDisabledPath?: string;
 	adapterConfigPath?: string;
 	servers: McpServerDefinition[];
+	notes: string[];
+}
+
+/** Which configuration layer a Glayvin pack manifest was found in. */
+export type GlayvinPackLayer = "built-in" | "team" | "local" | "unknown";
+
+/** Why the resolver pulled a pack into the effective set. */
+export type GlayvinPackStatus =
+	| "effective"
+	| "available"
+	| "disabled"
+	| "unknown";
+
+export interface GlayvinPackSummary {
+	id: string;
+	layer: GlayvinPackLayer;
+	/** Set when `layer` is "team": the registered team name the manifest was found under. */
+	teamName?: string;
+	description?: string;
+	status: GlayvinPackStatus;
+	/** The resolver's own inclusion reason, e.g. "profile", "includes", "core (auto)". */
+	via?: string;
+	/** Active despite the profile manifest never naming it — another pack pulled it in. */
+	implicit: boolean;
+	packageCount: number;
+	extensionCount: number;
+	skillCount: number;
+	commandCount: number;
+	hookCount: number;
+}
+
+export interface GlayvinProfileSummary {
+	id: string;
+	layer: GlayvinPackLayer;
+	description?: string;
+	active: boolean;
+	/** Packs the manifest names directly, before the resolver expands `includes`. */
+	packIds: string[];
+}
+
+/** What a registered team layer actually supplies. */
+export interface GlayvinTeamContributions {
+	packIds: string[];
+	profileIds: string[];
+	mcpServerNames: string[];
+	skillCount: number;
+	hasInstructions: boolean;
+}
+
+export interface GlayvinTeamSummary {
+	name: string;
+	path: string;
+	exists: boolean;
+	enabled: boolean;
+	contributes: GlayvinTeamContributions;
+}
+
+export interface GlayvinPackageSummary {
+	name: string;
+	version?: string;
+	/** Pack id that contributed this package. */
+	pack?: string;
+	/** True when Cosmos deliberately keeps this package out of its managed agent directory. */
+	excludedByCosmos: boolean;
+}
+
+export interface GlayvinProfileOverview {
+	available: boolean;
+	/** Whether pack and profile details came from Glayvin's resolver or from reading files directly. */
+	source: "resolver" | "files";
+	glayvinHome?: string;
+	resolvedPath?: string;
+	configPath?: string;
+	/** Active profile id, e.g. "default". */
+	profile?: string;
+	packs: GlayvinPackSummary[];
+	profiles: GlayvinProfileSummary[];
+	teams: GlayvinTeamSummary[];
+	packages: GlayvinPackageSummary[];
 	notes: string[];
 }
 
@@ -413,6 +492,8 @@ export interface DesktopApi {
 	/** Remove a workspace symlink. Never touches real directories. */
 	unlinkWorkspaceRepo(name: string): Promise<WorkspaceHealth>;
 	getMcpOverview(): Promise<McpConfigOverview>;
+	/** Read-only view of the Glayvin profile, packs, and registered teams. */
+	getGlayvinProfileOverview(): Promise<GlayvinProfileOverview>;
 	getFigmaXcodeAuthStatus(): Promise<FigmaXcodeAuthStatus>;
 	launchFigmaXcodePluginInstall(): Promise<void>;
 	importXcodeFigmaAuth(): Promise<FigmaXcodeImportResult>;

@@ -3,6 +3,11 @@ import type {
 	DesktopSettings,
 	DiscoveredTeam,
 	FigmaXcodeAuthStatus,
+	GlayvinPackageSummary,
+	GlayvinPackLayer,
+	GlayvinPackSummary,
+	GlayvinProfileOverview,
+	GlayvinTeamSummary,
 	McpConfigOverview,
 	McpServerDefinition,
 	ProviderInfo,
@@ -16,6 +21,7 @@ import {
 	FolderOpen,
 	Info,
 	KeyRound,
+	Layers,
 	Pencil,
 	Plus,
 	Plug,
@@ -116,17 +122,17 @@ function PathSettingInput({
 	);
 }
 
-function describeProfileSource(info: AppInfo | undefined): {
+function describeAgentDirSource(info: AppInfo | undefined): {
 	label: string;
 	help: string;
 	button: string;
 } {
-	switch (info?.profileSource) {
+	switch (info?.agentDirSource) {
 		case "cosmos-managed":
 			return {
 				label: "Cosmos workspace (recommended)",
 				help:
-					"Cosmos is using its own managed Pi profile. If a Glayvin home is available, Cosmos still passes it through for shared MCP, skills, prompts, and company context without reusing the terminal session store.",
+					"Cosmos is using its own managed Pi agent directory. If a Glayvin home is available, Cosmos still passes it through for shared MCP, skills, prompts, and company context without reusing the terminal session store.",
 				button: "Using recommended setup",
 			};
 		case "glayvin":
@@ -154,7 +160,7 @@ function General({
 	update(patch: Partial<DesktopSettings>): void;
 }) {
 	const info = useStore((s) => s.appInfo);
-	const profile = describeProfileSource(info);
+	const agentDir = describeAgentDirSource(info);
 	const [cliPath, setCliPath] = useState(settings.piCliPath);
 	const [agentDirPath, setAgentDirPath] = useState(settings.agentDirPath);
 	const [glayvinHomePath, setGlayvinHomePath] = useState(
@@ -181,10 +187,10 @@ function General({
 	]);
 
 	useEffect(() => {
-		if (info?.profileSource === "glayvin" || info?.profileSource === "custom") {
+		if (info?.agentDirSource === "glayvin" || info?.agentDirSource === "custom") {
 			setShowAdvanced(true);
 		}
-	}, [info?.profileSource]);
+	}, [info?.agentDirSource]);
 
 	const savePath = (
 		key: "piCliPath" | "agentDirPath" | "glayvinHomePath" | "workspaceRootPath",
@@ -200,19 +206,19 @@ function General({
 	return (
 		<>
 			<h3>General</h3>
-			<Setting name="Workspace setup" help={profile.help}>
+			<Setting name="Workspace setup" help={agentDir.help}>
 				<div
 					className="setting-control"
 					style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
 				>
-					<span className="muted">{profile.label}</span>
+					<span className="muted">{agentDir.label}</span>
 					<button
 						type="button"
 						className="btn small"
-						disabled={info?.profileSource === "cosmos-managed"}
+						disabled={info?.agentDirSource === "cosmos-managed"}
 						onClick={() => update({ agentDirPath: "", glayvinHomePath: "" })}
 					>
-						{profile.button}
+						{agentDir.button}
 					</button>
 				</div>
 			</Setting>
@@ -389,10 +395,10 @@ function General({
 					</Setting>
 					<Setting
 						name="pi configuration folder"
-						help="Absolute path to the pi agent directory containing settings.json, auth.json, and sessions/. Leave empty to use Cosmos's own managed GUI profile. When Glayvin is installed, Cosmos still shares its home automatically for MCP, skills, prompts, and company context; set this explicitly only if you want to fully reuse an existing Pi or Glayvin agent directory."
+						help="Absolute path to the pi agent directory containing settings.json, auth.json, and sessions/. Leave empty to use Cosmos's own managed agent directory. When Glayvin is installed, Cosmos still shares its home automatically for MCP, skills, prompts, and company context; set this explicitly only if you want to fully reuse an existing Pi or Glayvin agent directory."
 					>
 						<PathSettingInput
-							placeholder="Cosmos managed profile"
+							placeholder="Cosmos managed agent directory"
 							value={agentDirPath}
 							width={320}
 							onChange={setAgentDirPath}
@@ -1423,13 +1429,356 @@ function Mcps() {
 	);
 }
 
+const PACK_LAYER_LABEL: Record<GlayvinPackLayer, string> = {
+	"built-in": "Built-in",
+	team: "Team",
+	local: "Personal",
+	unknown: "Unknown",
+};
+
+const PACK_LAYER_BLURB: Record<GlayvinPackLayer, string> = {
+	"built-in": "Shipped with Glayvin.",
+	team: "Authored by a team you have registered.",
+	local: "Your own packs, on this machine only.",
+	unknown: "Active, but the manifest is no longer on disk.",
+};
+
+const PACK_LAYER_ORDER: GlayvinPackLayer[] = [
+	"built-in",
+	"team",
+	"local",
+	"unknown",
+];
+
+/** Every pack counts down to 1 of something, so the plural has to bend. */
+function countLabel(count: number, noun: string): string {
+	return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** Turns the resolver's terse inclusion reason into something a reader can act on. */
+function inclusionReason(pack: GlayvinPackSummary): string | undefined {
+	switch (pack.via) {
+		case "profile":
+			return "Named by the active profile";
+		case "includes":
+			return "Pulled in by another pack, not named by the profile";
+		case "enabledPacks":
+			return "Turned on by hand, outside the profile";
+		case "core (auto)":
+			return "Always on";
+		default:
+			return pack.via?.startsWith("requires:")
+				? `Required by ${pack.via.slice("requires:".length)}`
+				: pack.via;
+	}
+}
+
+function teamContributionLabel(team: GlayvinTeamSummary): string {
+	const { contributes } = team;
+	const parts: string[] = [];
+	if (contributes.packIds.length > 0)
+		parts.push(countLabel(contributes.packIds.length, "pack"));
+	if (contributes.profileIds.length > 0)
+		parts.push(countLabel(contributes.profileIds.length, "profile"));
+	if (contributes.mcpServerNames.length > 0)
+		parts.push(`MCP: ${contributes.mcpServerNames.join(", ")}`);
+	if (contributes.skillCount > 0)
+		parts.push(countLabel(contributes.skillCount, "skill"));
+	if (contributes.hasInstructions) parts.push("shared instructions");
+	return parts.length > 0 ? parts.join(" · ") : "Contributes nothing yet";
+}
+
+function PackCard({
+	pack,
+	packages,
+}: {
+	pack: GlayvinPackSummary;
+	packages: GlayvinPackageSummary[];
+}) {
+	const reason = inclusionReason(pack);
+	return (
+		<div className="mcp-card">
+			<div className="mcp-card-header">
+				<div className="info">
+					<div className="mcp-title-row">
+						<strong>{pack.id}</strong>
+						<div className="mcp-badges">
+							{pack.status === "effective" && (
+								<span className="mcp-badge">On</span>
+							)}
+							{pack.status === "disabled" && (
+								<span className="mcp-badge warning">Disabled</span>
+							)}
+							{pack.status === "available" && (
+								<span className="mcp-badge neutral">Off</span>
+							)}
+							{pack.implicit && (
+								<span className="mcp-badge neutral">Implicit</span>
+							)}
+							{pack.layer === "team" && pack.teamName && (
+								<span className="mcp-badge neutral">{pack.teamName}</span>
+							)}
+						</div>
+					</div>
+					{pack.description && (
+						<div className="small-text muted">{pack.description}</div>
+					)}
+					{pack.status === "effective" && reason && (
+						<div className="small-text muted">{reason}</div>
+					)}
+					{pack.status === "effective" && (
+						<div className="small-text muted">
+							{countLabel(pack.packageCount, "package")} ·{" "}
+							{countLabel(pack.extensionCount, "extension")} ·{" "}
+							{countLabel(pack.skillCount, "skill")} ·{" "}
+							{countLabel(pack.commandCount, "command")} ·{" "}
+							{countLabel(pack.hookCount, "hook")}
+						</div>
+					)}
+					{packages.length > 0 && (
+						<div className="small-text muted selectable">
+							{packages.map((pkg) => (
+								<div key={pkg.name}>
+									{pkg.name}
+									{pkg.version ? `@${pkg.version}` : ""}
+									{pkg.excludedByCosmos && (
+										<span className="mcp-badge warning" style={{ marginLeft: 6 }}>
+											Not used by Cosmos
+										</span>
+									)}
+								</div>
+							))}
+						</div>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function Glayvin() {
+	const info = useStore((s) => s.appInfo);
+	const [overview, setOverview] = useState<GlayvinProfileOverview | null>(null);
+	const [loading, setLoading] = useState(true);
+
+	const refresh = useCallback(async () => {
+		setLoading(true);
+		try {
+			setOverview(await api.getGlayvinProfileOverview());
+		} catch (error) {
+			toast("error", errorMessage(error));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
+
+	const packagesByPack = useMemo(() => {
+		const grouped = new Map<string, GlayvinPackageSummary[]>();
+		for (const pkg of overview?.packages ?? []) {
+			const key = pkg.pack ?? "";
+			grouped.set(key, [...(grouped.get(key) ?? []), pkg]);
+		}
+		return grouped;
+	}, [overview?.packages]);
+
+	const packsByLayer = useMemo(() => {
+		const grouped = new Map<GlayvinPackLayer, GlayvinPackSummary[]>();
+		for (const pack of overview?.packs ?? []) {
+			grouped.set(pack.layer, [...(grouped.get(pack.layer) ?? []), pack]);
+		}
+		// Active packs first, so the layers a user has actually turned on read from the top.
+		for (const packs of grouped.values()) {
+			packs.sort((a, b) => {
+				const aOn = a.status === "effective" ? 0 : 1;
+				const bOn = b.status === "effective" ? 0 : 1;
+				return aOn - bOn || a.id.localeCompare(b.id);
+			});
+		}
+		return grouped;
+	}, [overview?.packs]);
+
+	return (
+		<>
+			<h3>Glayvin</h3>
+			<p className="small-text muted" style={{ marginTop: -8 }}>
+				A Glayvin profile turns on a set of packs, and Cosmos inherits their pi
+				packages. Read-only here — switch profiles with{" "}
+				<code>glayvin profile set</code>.
+			</p>
+			<div className="mcp-toolbar">
+				<button type="button" className="btn small" onClick={() => void refresh()}>
+					<RefreshCw size={12} /> Refresh
+				</button>
+				{overview?.resolvedPath && (
+					<button
+						type="button"
+						className="btn small"
+						onClick={() => void api.openInEditor(overview.resolvedPath!)}
+					>
+						Open resolved profile
+					</button>
+				)}
+			</div>
+			{loading && (
+				<div className="working">
+					<SpinnerIcon size={14} /> Loading Glayvin details…
+				</div>
+			)}
+			{!loading && overview && (
+				<>
+					<div className="mcp-meta">
+						<div>
+							<strong>Active profile:</strong>{" "}
+							<span className="muted selectable">
+								{overview.profile ?? "Not available"}
+							</span>
+						</div>
+						<div>
+							<strong>Glayvin home:</strong>{" "}
+							<span className="muted selectable">
+								{overview.glayvinHome
+									? tildify(overview.glayvinHome, info?.homeDir)
+									: "Not available"}
+							</span>
+						</div>
+					</div>
+					{overview.notes.map((note) => (
+						<div key={note} className="notice info" style={{ marginTop: 10 }}>
+							{note}
+						</div>
+					))}
+
+					{overview.available && (
+						<>
+							<h3 style={{ marginTop: 18 }}>Profiles</h3>
+							{overview.profiles.length === 0 ? (
+								<div className="muted">No profiles were found.</div>
+							) : (
+								<div className="mcp-list">
+									{overview.profiles.map((profile) => (
+										<div key={profile.id} className="mcp-card">
+											<div className="mcp-card-header">
+												<div className="info">
+													<div className="mcp-title-row">
+														<strong>{profile.id}</strong>
+														<div className="mcp-badges">
+															{profile.active && (
+																<span className="mcp-badge">Active</span>
+															)}
+															<span className="mcp-badge neutral">
+																{PACK_LAYER_LABEL[profile.layer]}
+															</span>
+														</div>
+													</div>
+													{profile.description && (
+														<div className="small-text muted">
+															{profile.description}
+														</div>
+													)}
+													{profile.packIds.length > 0 && (
+														<div className="small-text muted">
+															Turns on {profile.packIds.join(", ")}
+														</div>
+													)}
+												</div>
+											</div>
+										</div>
+									))}
+								</div>
+							)}
+
+							<h3 style={{ marginTop: 18 }}>Packs</h3>
+							{overview.packs.length === 0 ? (
+								<div className="muted">No packs were found.</div>
+							) : (
+								PACK_LAYER_ORDER.filter((layer) => packsByLayer.has(layer)).map(
+									(layer) => (
+										<div key={layer} style={{ marginTop: 12 }}>
+											<div className="mcp-title-row">
+												<strong>{PACK_LAYER_LABEL[layer]}</strong>
+												<span className="small-text muted">
+													{PACK_LAYER_BLURB[layer]}
+												</span>
+											</div>
+											<div className="mcp-list">
+												{packsByLayer.get(layer)?.map((pack) => (
+													<PackCard
+														key={pack.id}
+														pack={pack}
+														packages={packagesByPack.get(pack.id) ?? []}
+													/>
+												))}
+											</div>
+										</div>
+									),
+								)
+							)}
+
+							<h3 style={{ marginTop: 18 }}>Team layers</h3>
+							<p className="small-text muted" style={{ marginTop: -8 }}>
+								A team layer is a directory of shared config Glayvin reads on every
+								run. It can supply packs and profiles, and does not have to.
+							</p>
+							{overview.teams.length === 0 ? (
+								<div className="muted">
+									No team layers are registered. Add one with{" "}
+									<code>glayvin manage teams add</code>.
+								</div>
+							) : (
+								<div className="mcp-list">
+									{overview.teams.map((team) => (
+										<div key={team.name} className="mcp-card">
+											<div className="mcp-card-header">
+												<div className="info">
+													<div className="mcp-title-row">
+														<strong>{team.name}</strong>
+														<div className="mcp-badges">
+															{!team.enabled && (
+																<span className="mcp-badge warning">Disabled</span>
+															)}
+															{!team.exists && (
+																<span className="mcp-badge danger">Missing</span>
+															)}
+														</div>
+													</div>
+													<div className="small-text muted selectable">
+														{tildify(team.path, info?.homeDir)}
+													</div>
+													<div className="small-text muted">
+														{teamContributionLabel(team)}
+													</div>
+												</div>
+											</div>
+										</div>
+									))}
+								</div>
+							)}
+						</>
+					)}
+
+					<p className="small-text muted" style={{ marginTop: 18 }}>
+						Cosmos mirrors the active profile's packages into its own agent
+						directory, minus the external permission system, and adds its bundled
+						company package. Packs and profiles can also come from the repository
+						Glayvin runs in; Cosmos cannot see those from here.
+					</p>
+				</>
+			)}
+		</>
+	);
+}
+
 function About() {
 	const info = useStore((s) => s.appInfo);
 	if (!info) return null;
-	const profileSourceLabel =
-		info.profileSource === "cosmos-managed"
+	const agentDirSourceLabel =
+		info.agentDirSource === "cosmos-managed"
 			? "Cosmos workspace (recommended)"
-			: info.profileSource === "glayvin"
+			: info.agentDirSource === "glayvin"
 				? "Shared Glayvin setup"
 				: "Custom Pi setup";
 	return (
@@ -1447,14 +1796,14 @@ function About() {
 			<Setting
 				name="Workspace source"
 				help={
-					info.profileSource === "cosmos-managed"
+					info.agentDirSource === "cosmos-managed"
 						? "Cosmos is using its own managed GUI workspace. If Glayvin is installed, its shared MCP/config context is still available without reusing the terminal session store."
-						: info.profileSource === "glayvin"
+						: info.agentDirSource === "glayvin"
 							? "Cosmos is currently reusing a shared Glayvin setup."
 							: "Cosmos is currently using a manually chosen Pi workspace."
 				}
 			>
-				<span className="muted">{profileSourceLabel}</span>
+				<span className="muted">{agentDirSourceLabel}</span>
 			</Setting>
 			<Setting
 				name="Cosmos workspace root"
@@ -1945,6 +2294,7 @@ const PANES: { id: SettingsPane; label: string; icon: typeof Plug }[] = [
 	{ id: "providers", label: "Providers", icon: KeyRound },
 	{ id: "teams", label: "Teams", icon: Users },
 	{ id: "mcps", label: "MCPs", icon: Plug },
+	{ id: "glayvin", label: "Glayvin", icon: Layers },
 	{ id: "about", label: "About", icon: Info },
 ];
 
@@ -2001,6 +2351,7 @@ export function SettingsModal({ pane }: { pane: SettingsPane }) {
 					{pane === "providers" && <Providers />}
 					{pane === "teams" && <Teams />}
 					{pane === "mcps" && <Mcps />}
+					{pane === "glayvin" && <Glayvin />}
 					{pane === "about" && <About />}
 				</div>
 			</div>

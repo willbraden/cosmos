@@ -25,6 +25,7 @@ const api: DesktopApi = {
 	unlinkWorkspaceRepo: (name) =>
 		ipcRenderer.invoke("workspace:unlink-repo", name),
 	getMcpOverview: () => ipcRenderer.invoke("mcp:overview"),
+	getGlayvinProfileOverview: () => ipcRenderer.invoke("glayvin:profile-overview"),
 	getFigmaXcodeAuthStatus: () => ipcRenderer.invoke("figma:xcode-status"),
 	launchFigmaXcodePluginInstall: () =>
 		ipcRenderer.invoke("figma:xcode-plugin-install"),
