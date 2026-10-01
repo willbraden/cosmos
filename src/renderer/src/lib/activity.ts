@@ -174,10 +174,32 @@ export function summarizeReasoning(
 	return settled ? "Thought" : "Thinking";
 }
 
-export function reasoningStepCount(blocks: Block[]): number {
-	return blocks.filter(
-		(block) => block.type === "thinking" || block.type === "toolCall",
-	).length;
+export interface Thought {
+	title: string | null;
+	body: string;
+}
+
+/**
+ * Reasoning arrives as markdown whose bold standalone lines title each shift in
+ * thought, so split on them and let every section collapse on its own.
+ */
+export function splitThoughts(text: string): Thought[] {
+	const sections: Array<{ title: string | null; lines: string[] }> = [];
+	for (const line of text.split("\n")) {
+		const heading = /^\s*\*\*(.+?)\*\*\s*$/.exec(line);
+		if (heading) {
+			sections.push({ title: heading[1].trim(), lines: [] });
+			continue;
+		}
+		if (sections.length === 0) sections.push({ title: null, lines: [] });
+		sections[sections.length - 1].lines.push(line);
+	}
+	return sections
+		.map((section) => ({
+			title: section.title,
+			body: section.lines.join("\n").trim(),
+		}))
+		.filter((section) => section.title || section.body);
 }
 
 export function summarizeBusyWork(

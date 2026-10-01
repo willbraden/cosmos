@@ -1,7 +1,7 @@
 import type { ImageContent, TextContent, ToolResultPayload } from "@shared/pi-types";
 import {
 	Ban,
-	ChevronRight,
+	ChevronDown,
 	CircleAlert,
 	CircleCheck,
 	ExternalLink,
@@ -103,8 +103,10 @@ export const ToolCard = memo(function ToolCard({
 	return (
 		<div className="fold">
 			<button type="button" className="fold-header" onClick={() => setOpen(!open)} aria-expanded={open}>
-				<ChevronRight size={14} className={`chev${open ? " open" : ""}`} />
-				<Icon size={14} style={{ flexShrink: 0 }} />
+				<span className="fold-icon">
+					<Icon size={14} className="fold-icon-rest" />
+					<ChevronDown size={14} className="fold-icon-chevron" />
+				</span>
 				<span className="label">{summary.label}</span>
 				<span className="tail">
 					{stats && (

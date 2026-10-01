@@ -730,7 +730,14 @@ select {
 .assistant-msg {
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
+	gap: 6px;
+}
+
+/* Activity rows pack tightly; prose earns its own breathing room. */
+.assistant-msg > .md,
+.assistant-msg > .error-card,
+.assistant-msg > .assistant-footer {
+	margin: 6px 0;
 }
 
 .assistant-footer {
@@ -1016,77 +1023,54 @@ select {
 	width: 100%;
 	border: none;
 	background: transparent;
-	padding: 4px 6px;
-	margin-left: -6px;
-	border-radius: 7px;
+	padding: 2px 0;
 	color: var(--color-foreground-neutral-default-normal);
 	font-size: 13px;
 	text-align: left;
 	min-width: 0;
 }
 
-.fold-header.active-thread {
-	flex-direction: column;
-	align-items: stretch;
-	gap: 4px;
-	padding: 8px 10px;
-	margin-left: 0;
-	border: 1px solid var(--color-border-neutral-subtle);
-	background: var(--color-background-neutral-default-normal-idle);
+/* Reasoning sits inline with the tool rows, so it only differs in weight. */
+.thinking-header {
+	color: var(--color-foreground-neutral-default-subtle);
 }
 
-.assistant-turn-header {
-	gap: 10px;
-	padding: 2px 0;
-	margin-left: 0;
-	border: none;
-	background: transparent;
-	font-size: 15px;
-	line-height: 20px;
-	color: var(--color-foreground-neutral-default-normal);
-}
-
-.fold-header.assistant-turn-header:hover {
-	background: transparent;
-	color: var(--color-foreground-neutral-default-strong);
-}
-
-/* One 16px slot holds the resting icon and the chevron; hover/expanded swaps them. */
+/* One 14px slot holds the resting icon and the chevron; hover/expanded swaps them. */
 .fold-icon {
 	position: relative;
 	flex-shrink: 0;
-	width: 16px;
-	height: 16px;
+	width: 14px;
+	height: 14px;
 }
 
-.assistant-turn-header .fold-icon > * {
+.fold-header .fold-icon > * {
 	position: absolute;
 	inset: 0;
 	transition:
 		opacity 0.12s,
-		transform 0.15s;
+		transform 300ms ease;
 }
 
-.assistant-turn-header .fold-icon-chevron {
+.fold-header .fold-icon-chevron {
 	opacity: 0;
 }
 
 /* Collapsed points down; expanded flips it up. */
-.assistant-turn-header[aria-expanded="true"] .fold-icon-chevron {
+.fold-header[aria-expanded="true"] .fold-icon-chevron {
 	transform: rotate(180deg);
 }
 
-.assistant-turn-header:hover .fold-icon-rest,
-.assistant-turn-header[aria-expanded="true"] .fold-icon-rest {
+.fold-header:hover .fold-icon-rest,
+.fold-header[aria-expanded="true"] .fold-icon-rest {
 	opacity: 0;
 }
 
-.assistant-turn-header:hover .fold-icon-chevron,
-.assistant-turn-header[aria-expanded="true"] .fold-icon-chevron {
+.fold-header:hover .fold-icon-chevron,
+.fold-header[aria-expanded="true"] .fold-icon-chevron {
 	opacity: 1;
 }
 
-.assistant-turn-header.is-live .label {
+.thinking-header.is-live .label {
 	background: linear-gradient(
 		100deg,
 		var(--color-foreground-neutral-default-subtle) 0%,
@@ -1119,7 +1103,7 @@ select {
 }
 
 .fold-header:hover {
-	background: var(--color-background-neutral-default-subtle-hover);
+	background: transparent;
 	color: var(--color-foreground-neutral-default-strong);
 }
 
@@ -1133,16 +1117,6 @@ select {
 .fold-header .label code {
 	font-family: var(--font-family-mono);
 	font-size: 12px;
-}
-
-.fold-header .chev {
-	flex-shrink: 0;
-	transition: transform 0.15s;
-	color: var(--color-foreground-neutral-default-subtle);
-}
-
-.fold-header .chev.open {
-	transform: rotate(90deg);
 }
 
 .fold-header .tail {
@@ -1255,40 +1229,38 @@ select {
 	}
 }
 
-.reasoning-body {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
+.thinking-reveal {
+	display: grid;
+	grid-template-rows: 0fr;
+	opacity: 0;
+	transition:
+		grid-template-rows 300ms ease,
+		opacity 300ms ease;
+}
+
+.thinking-reveal.expanded {
+	grid-template-rows: 1fr;
+	opacity: 1;
+}
+
+.thinking-reveal-inner {
+	min-height: 0;
+	overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.thinking-reveal,
+	.thinking-header .fold-icon > * {
+		transition: none;
+	}
+}
+
+/* Reasoning text hangs off a rail aligned under the fold icon. */
+.thinking-content {
 	margin-top: 6px;
-}
-
-/* Expanded details hang off a single rail aligned under the fold icon. */
-.assistant-turn-body {
-	margin-top: 8px;
-	margin-left: 7px;
-	padding-left: 17px;
+	margin-left: 6px;
+	padding-left: 15px;
 	border-left: 2px solid var(--color-border-neutral-subtle);
-}
-
-.assistant-turn-step {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-}
-
-.assistant-turn-step + .assistant-turn-step {
-	margin-top: 10px;
-}
-
-.reasoning-note {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-
-/* The caption's padding is tuned for the bordered tool body; flush it here. */
-.reasoning-note .tool-section-label {
-	padding: 0;
 }
 
 .thinking-body {
