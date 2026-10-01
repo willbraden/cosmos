@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Drifting stars joined by proximity lines, behind the home page only.
+ * Drifting stars joined by proximity lines, behind the home page and behind a
+ * session that has not been written to yet.
  *
- * Sized to its container rather than the window: it lives inside `.home`, so
- * window-sized geometry would misplace the field whenever the sidebar is
- * resized or collapsed.
+ * Sized to its container rather than the window: it lives inside `.home` or
+ * `.main`, so window-sized geometry would misplace the field whenever the
+ * sidebar is resized or collapsed.
  */
 
 const COUNT = 50;
@@ -22,7 +23,7 @@ interface Star {
 	phase: number;
 }
 
-export function ConstellationField() {
+export function ConstellationField({ fading = false }: { fading?: boolean }) {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
 	useEffect(() => {
@@ -142,5 +143,11 @@ export function ConstellationField() {
 		};
 	}, []);
 
-	return <canvas ref={canvasRef} className="home-constellations" aria-hidden="true" />;
+	return (
+		<canvas
+			ref={canvasRef}
+			className={`home-constellations${fading ? " fading" : ""}`}
+			aria-hidden="true"
+		/>
+	);
 }

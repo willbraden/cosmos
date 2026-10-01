@@ -1,10 +1,11 @@
 import { FileDiff, FolderOpen, GitFork, RotateCw, SquareTerminal, TriangleAlert } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, basename, formatCost, formatTokens, tildify } from "../lib/api";
 import { cloneSession, renameSession, retryTab } from "../state/actions";
 import { collectFileChanges, firstUserMessage } from "../state/chat-model";
 import { sessionTitle, type TabState, useStore } from "../state/store";
 import { Composer } from "./Composer";
+import { ConstellationField } from "./ConstellationField";
 import { DialogCard } from "./DialogCard";
 import { FigmaChatAssist } from "./FigmaChatAssist";
 import { useDismiss } from "./Pickers";
@@ -206,9 +207,44 @@ function Welcome({ tab }: { tab: TabState }) {
 	);
 }
 
+/**
+ * Centered shell sink-out, then a beat of empty space, then the bottom composer
+ * settling in. Must stay in sync with the `composer-*` keyframes in app.css.
+ */
+const HANDOFF_EXIT_MS = 190;
+const HANDOFF_SETTLE_MS = 330;
+
+type HandoffPhase = "idle" | "leaving" | "settling";
+
 export function ChatView({ tab }: { tab: TabState }) {
 	const [scrolled, setScrolled] = useState(false);
+	const constellations = useStore((s) => s.settings.homeConstellations);
 	const dialog = tab.dialogs[0];
+
+	const isEmpty = tab.status !== "starting" && tab.chat.items.length === 0 && !tab.isStreaming;
+	// Only runs on a live first-message transition, so a session reopened from
+	// the sidebar lands on its transcript with no animation.
+	const [phase, setPhase] = useState<HandoffPhase>("idle");
+	const wasEmpty = useRef(isEmpty);
+
+	useEffect(() => {
+		const leaving = wasEmpty.current && !isEmpty;
+		wasEmpty.current = isEmpty;
+		if (!leaving) return;
+		setPhase("leaving");
+		const toSettling = setTimeout(() => setPhase("settling"), HANDOFF_EXIT_MS);
+		const toIdle = setTimeout(() => setPhase("idle"), HANDOFF_EXIT_MS + HANDOFF_SETTLE_MS);
+		return () => {
+			clearTimeout(toSettling);
+			clearTimeout(toIdle);
+		};
+	}, [isEmpty]);
+
+	// Switching tabs mid-flight would otherwise strand the animation state.
+	useEffect(() => {
+		setPhase("idle");
+		wasEmpty.current = isEmpty;
+	}, [tab.tabId]);
 
 	if (tab.status === "error") {
 		return (
@@ -228,20 +264,27 @@ export function ChatView({ tab }: { tab: TabState }) {
 		);
 	}
 
-	const showCenteredComposer =
-		tab.status !== "starting" && tab.chat.items.length === 0 && !tab.isStreaming;
+	// Keep the centered layout mounted through the exit so it sinks away
+	// instead of being replaced on the same frame.
+	const showCentered = isEmpty || phase === "leaving";
 
 	return (
 		<div className="main">
+			{showCentered && constellations && (
+				<ConstellationField key={tab.tabId} fading={phase === "leaving"} />
+			)}
 			<ChatHeader tab={tab} scrolled={scrolled} />
-			<div className={showCenteredComposer ? "chat-stage chat-stage-empty" : "chat-stage"}>
+			<div className={showCentered ? "chat-stage chat-stage-empty" : "chat-stage"}>
 				<FigmaChatAssist tab={tab} />
 				{tab.status === "starting" && tab.chat.items.length === 0 ? (
 					<div className="empty">
 						<SpinnerIcon size={64} />
 					</div>
-				) : showCenteredComposer ? (
-					<div className="empty-chat-shell">
+				) : showCentered ? (
+					<div
+						className={`empty-chat-shell${phase === "leaving" ? " leaving" : ""}`}
+						inert={phase === "leaving"}
+					>
 						<Welcome tab={tab} />
 						<Composer tab={tab} centered />
 					</div>
@@ -254,7 +297,7 @@ export function ChatView({ tab }: { tab: TabState }) {
 					<DialogCard key={dialog.id} tabId={tab.tabId} dialog={dialog} />
 				</div>
 			)}
-			{!showCenteredComposer && <Composer tab={tab} />}
+			{!showCentered && <Composer tab={tab} settling={phase === "settling"} />}
 		</div>
 	);
 }

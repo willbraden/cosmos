@@ -87,6 +87,7 @@ select {
 	display: flex;
 	flex-direction: column;
 	position: relative;
+	z-index: 1;
 }
 
 .chat-stage-empty {
@@ -101,6 +102,80 @@ select {
 	flex-direction: column;
 	align-items: center;
 	gap: 36px;
+}
+
+/* Arrival on a new session: phrase first, composer a beat behind. */
+.empty-chat-shell > * {
+	animation: composer-rise 440ms cubic-bezier(0.22, 0.75, 0.3, 1) both;
+}
+
+.empty-chat-shell > *:nth-child(2) {
+	animation-delay: 80ms;
+}
+
+/* Handoff to the transcript: the whole shell sinks away as one piece. The
+   bottom composer holds off until this has cleared, leaving a short beat
+   where no composer is on screen. */
+.empty-chat-shell.leaving {
+	pointer-events: none;
+}
+
+.empty-chat-shell.leaving > * {
+	animation: composer-sink-out 190ms cubic-bezier(0.4, 0, 0.9, 0.5) both;
+}
+
+.composer-wrap.settling {
+	animation: composer-settle-in 260ms cubic-bezier(0.22, 0.75, 0.3, 1) 70ms both;
+}
+
+@keyframes composer-rise {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes composer-sink-out {
+	from {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	to {
+		opacity: 0;
+		transform: translateY(16px);
+	}
+}
+
+@keyframes composer-settle-in {
+	from {
+		opacity: 0;
+		transform: translateY(-14px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.home-constellations.fading {
+	opacity: 0;
+	transition: opacity 190ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.empty-chat-shell > *,
+	.empty-chat-shell.leaving > *,
+	.composer-wrap.settling {
+		animation: none;
+	}
+
+	.home-constellations.fading {
+		transition: none;
+	}
 }
 
 .main-header {

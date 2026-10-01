@@ -349,8 +349,8 @@ function General({
 				</div>
 			</Setting>
 			<Setting
-				name="Home star field"
-				help="Drifting constellations behind the home page. Never shown inside a session."
+				name="Star field"
+				help="Drifting constellations behind the home page and new, empty sessions. Hidden once a conversation starts."
 			>
 				<div className="segmented">
 					{([true, false] as const).map((on) => (

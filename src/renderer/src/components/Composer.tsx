@@ -89,9 +89,11 @@ async function readImage(file: File): Promise<Attachment | null> {
 export function Composer({
 	tab,
 	centered = false,
+	settling = false,
 }: {
 	tab: TabState;
 	centered?: boolean;
+	settling?: boolean;
 }) {
 	const textarea = useRef<HTMLTextAreaElement>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
@@ -300,7 +302,9 @@ export function Composer({
 	);
 
 	return (
-		<div className={`composer-wrap${centered ? " centered" : ""}`}>
+		<div
+			className={`composer-wrap${centered ? " centered" : ""}${settling ? " settling" : ""}`}
+		>
 			{above.map(([key, widget]) => (
 				<div key={key} className="widget">
 					{widget.lines.join("\n")}
