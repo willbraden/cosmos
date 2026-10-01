@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # vitest picks up test/e2e/pi-rpc.e2e.test.ts, which spawns the real
+      # Electron binary under ELECTRON_RUN_AS_NODE. That needs no display, but
+      # it does need the ~100MB download, which npm fetches outside the npm
+      # cache. Without this the suite can start before the binary has landed.
+      - name: Cache Electron binary
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      # npm ci, not npm install: the postinstall hotfix patches a specific
+      # bundled chunk of pi-coding-agent and exits 1 when that chunk moves, so
+      # the install has to stay on the version in the lockfile.
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
