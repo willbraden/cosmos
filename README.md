@@ -4,7 +4,14 @@ A desktop app for the [pi coding agent](https://github.com/earendil-works/pi), w
 
 ## Features
 
-- **Workspace dashboard**: the new-session screen lists your core company repos and experiments. Missing repos get a one-click **Clone** (`git@github.com:<org>/<repo>.git`, org configurable in Settings) with live git progress, or **Link existing…** to symlink a checkout you already have elsewhere on disk into the workspace root. Linked entries are badged and can be unlinked without touching the original folder.
+- **Workspace dashboard**: the new-session screen lists your core company repos and experiments. Missing repos get a one-click **Clone** (`git@github.com:<org>/<repo>.git`, org configurable in Settings) with live git progress, or **Link existing…** to symlink a checkout you already have elsewhere on disk into the workspace root. Linked entries are badged and can be unlinked without touching the original folder. Repos registered as a Glayvin team layer are badged with that team's name.
+- **Team-curated repo lists**: a Glayvin team can narrow the suggested repos to the ones its members actually work in, by committing a `cosmos-repos.json` to the root of its team layer:
+
+  ```json
+  { "org": "shipt", "repos": ["cosmos-ai", "design-system"] }
+  ```
+
+  Entries may also be objects (`{ "name": "neutron", "org": "other-org" }`) when a repo lives outside the team's org. Lists from multiple registered teams are combined. Anything not listed still shows up under experiments once it is on disk, and members with no such file keep the built-in list.
 - **Sessions sidebar**: every pi session on disk, grouped by project, with pinning, full-text search (⌘K), rename, export to HTML, and move to Trash. It updates live as sessions change, including ones created by the pi CLI.
 - **Concurrent sessions**: each session runs its own pi process. Background sessions keep working, show a spinner, and notify you when they finish or need input. The dock badge counts sessions waiting for you.
 - **Streaming transcript**: markdown with syntax highlighting and copy buttons, collapsible thinking, and per-tool cards (bash, read, edit/write with diffs, grep/find/ls). Retries and compaction appear inline.

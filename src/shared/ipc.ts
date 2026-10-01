@@ -111,6 +111,8 @@ export interface WorkspaceRepoHealth {
 	linkTarget?: string;
 	/** Clone URL for the curated core repos. Absent for experiments. */
 	cloneUrl?: string;
+	/** Name of the Glayvin team layer registered at this path, when one is. */
+	team?: string;
 }
 
 /** Streamed while a long-running workspace operation (currently `git clone`) runs. */
@@ -192,6 +194,97 @@ export interface FigmaAuthResetResult {
 	removed: boolean;
 	message: string;
 	status: FigmaXcodeAuthStatus;
+}
+
+/** A file or directory at a repo root that hints at what the repo is. */
+export interface TeamMarker {
+	name: string;
+	/** `layer` suggests Glayvin team config; `product` suggests a deployable service. */
+	kind: "layer" | "product";
+}
+
+/**
+ * Whether a registered team is actually being applied. Mirrors the resolver's
+ * filter in lib/resolver/src/layers.mjs: a team is only consumed when it is not
+ * disabled and its path still exists on disk.
+ */
+export type TeamMembershipState =
+	| "active"
+	| "disabled"
+	| "missing"
+	| "unresolved";
+
+export interface TeamMembership {
+	/** The name Glayvin registered it under, which need not be the repo name. */
+	name: string;
+	/** Empty for `unresolved`, where the registered path is relative. */
+	path: string;
+	state: TeamMembershipState;
+	/** True when the registered path is not where this pane would clone the repo. */
+	elsewhere: boolean;
+	/**
+	 * 1-based position among the teams Glayvin applies. Later teams override earlier
+	 * ones, so a higher number wins. Only set for `active` — the rest occupy no slot.
+	 */
+	precedence?: number;
+}
+
+/** A team-config repo found in the org, with everything needed to judge and join it. */
+export interface DiscoveredTeam {
+	repo: string;
+	org: string;
+	nameWithOwner: string;
+	description?: string;
+	htmlUrl: string;
+	cloneUrl: string;
+	/** Every marker matched at the repo root, shown so the heuristic stays visible. */
+	markers: TeamMarker[];
+	classification: "team" | "template" | "uncertain";
+	/**
+	 * Present whenever the team is registered in glayvin.json, whatever state it's
+	 * in. Absent means not joined. `state` mirrors the resolver's own filter, so a
+	 * team that isn't `active` is registered but contributing nothing.
+	 */
+	membership?: TeamMembership;
+
+	/** Set when the repo is already cloned into the workspace but not registered. */
+	clonedPath?: string;
+	/** True when the layer ships a cosmos-repos.json that curates the home screen. */
+	curatesRepos: boolean;
+}
+
+export interface TeamDiscovery {
+	available: boolean;
+	org: string;
+	workspaceRootPath: string;
+	glayvinHome?: string;
+	teams: DiscoveredTeam[];
+	notes: string[];
+	/** When the listed snapshot was fetched. Absent when nothing has been fetched yet. */
+	fetchedAt?: number;
+	fromCache: boolean;
+	/** False when the glayvin CLI is missing, so joining cannot be offered. */
+	canJoin: boolean;
+	/**
+	 * What the last search actually did. Lets an empty pane say what it looked for
+	 * instead of implying the org has nothing. Absent on caches written before this existed.
+	 */
+	survey?: TeamSurvey;
+}
+
+export interface TeamSurvey {
+	/** The filenames searched for, so an empty result is reproducible by hand. */
+	markers: string[];
+	/** Repos the union of those searches matched. */
+	matched: number;
+	/** Confirmed team layers, offered for joining outright. */
+	teams: number;
+	/**
+	 * Matched but not confirmed — an unreadable root, or too few layer markers. Still
+	 * listed and joinable, just hedged. All of them being uncertain means the
+	 * classifier confirmed nothing, which is worth saying out loud.
+	 */
+	uncertain: number;
 }
 
 export interface OpenSessionRequest {
@@ -336,6 +429,13 @@ export interface DesktopApi {
 		config: Record<string, unknown>,
 	): Promise<McpConfigOverview>;
 	removePersonalMcpServer(name: string): Promise<McpConfigOverview>;
+
+	/** Glayvin team repos visible in the org. Served from cache unless `refresh` is set. */
+	getTeamDiscovery(options?: { refresh?: boolean }): Promise<TeamDiscovery>;
+	/** Clone a team repo into the workspace and register it with Glayvin. */
+	joinTeam(repo: string): Promise<TeamDiscovery>;
+	/** Switch a registered team on or off. Keyed by the name Glayvin registered. */
+	setTeamEnabled(name: string, enabled: boolean): Promise<TeamDiscovery>;
 
 	listSessions(): Promise<SessionSummary[]>;
 	searchSessions(query: string): Promise<string[]>;

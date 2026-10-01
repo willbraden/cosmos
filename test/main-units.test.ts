@@ -20,7 +20,29 @@ import * as bridge from "../resources/pi-extension/desktop-bridge";
 import { ensureCosmosManagedAgentDir } from "../src/main/agent-home";
 import { fuzzyScore } from "../src/main/files";
 import {
+	type CommandResult,
+	type CommandRunner,
+	classifyRoot,
+	createCommandRunner,
+	discoverTeams,
+	effectivePrecedence,
+	isRateLimited,
+	parseRootNames,
+	parseSearchHits,
+	readCache,
+	registerGlayvinTeam,
+	resolveMembership,
+	searchArgs,
+	searchQuery,
+	setGlayvinTeamEnabled,
+	unionSearchHits,
+	writeCache,
+} from "../src/main/team-discovery";
+import {
 	inferGlayvinHomeFromAgentDir,
+	readDisabledTeamNames,
+	readGlayvinTeams,
+	readRegisteredTeamNames,
 	resolveGlayvinHomePath,
 } from "../src/main/glayvin-runtime";
 import {
@@ -55,7 +77,10 @@ import {
 	cloneWorkspaceRepo,
 	coreRepoCloneUrl,
 	inspectWorkspace,
-	isCoreRepoName,
+	findCoreRepo,
+	resolveCoreRepos,
+	DEFAULT_CORE_REPOS,
+	TEAM_REPOS_FILE,
 	linkWorkspaceRepo,
 	cloneFailureMessage,
 	lastMeaningfulLine,
@@ -248,6 +273,45 @@ describe("glayvin runtime detection", () => {
 				"/fallback/.glayvin",
 			),
 		).toBe("/override/.glayvin");
+	});
+});
+
+describe("glayvin teams", () => {
+	function homeWith(config: string): string {
+		const home = mkdtempSync(join(tmpdir(), "cosmos-teams-"));
+		mkdirSync(join(home, ".local"), { recursive: true });
+		writeFileSync(join(home, ".local", "glayvin.json"), config);
+		return home;
+	}
+
+	it("reads registered teams, skipping entries it cannot resolve", () => {
+		const home = homeWith(
+			JSON.stringify({
+				teams: [
+					{ name: "cosmos-ai", path: "/Users/test/Cosmos/cosmos-ai" },
+					// Relative paths are repo-relative, so there is nothing to match against.
+					{ name: "relative", path: "./shared-config" },
+					{ name: "  padded  ", path: "/Users/test/padded" },
+					{ name: "", path: "/Users/test/nameless" },
+					{ path: "/Users/test/anonymous" },
+					"not-an-object",
+				],
+			}),
+		);
+		expect(readGlayvinTeams(home)).toEqual([
+			{ name: "cosmos-ai", path: "/Users/test/Cosmos/cosmos-ai" },
+			{ name: "padded", path: "/Users/test/padded" },
+		]);
+	});
+
+	it("degrades to no teams rather than throwing", () => {
+		expect(readGlayvinTeams(undefined)).toEqual([]);
+		expect(readGlayvinTeams("/nope/does-not-exist")).toEqual([]);
+		expect(readGlayvinTeams(homeWith("{ not json"))).toEqual([]);
+		expect(readGlayvinTeams(homeWith(JSON.stringify({})))).toEqual([]);
+		expect(readGlayvinTeams(homeWith(JSON.stringify({ teams: "nope" })))).toEqual(
+			[],
+		);
 	});
 });
 
@@ -561,6 +625,50 @@ describe("workspace repos", () => {
 		expect(health.readyRepos).toBe(1);
 	});
 
+	it("tags repos registered as a glayvin team layer", () => {
+		const root = workspace();
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "design-ops", path: join(root, "cosmos-ai") },
+		]);
+
+		expect(
+			health.repos.find((repo) => repo.name === "cosmos-ai")?.team,
+		).toBe("design-ops");
+		// A repo nobody registered carries no team, so the UI keeps its own label.
+		expect(
+			health.repos.find((repo) => repo.name === "neutron"),
+		).not.toHaveProperty("team");
+	});
+
+	it("matches a team registered against a linked checkout's target", () => {
+		const root = workspace();
+		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
+		mkdirSync(join(external, ".git"), { recursive: true });
+		linkWorkspaceRepo({ rootPath: root, name: "neutron", targetPath: external });
+
+		// Trailing slashes are how a path lands when copied out of a shell.
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "platform", path: `${external}/` },
+		]);
+
+		expect(health.repos.find((repo) => repo.name === "neutron")?.team).toBe(
+			"platform",
+		);
+	});
+
+	it("tags experiments too, since a team can point anywhere", () => {
+		const root = workspace();
+		mkdirSync(join(root, "showcase"), { recursive: true });
+		const health = inspectWorkspace(root, undefined, [
+			{ name: "showcase-team", path: join(root, "showcase") },
+		]);
+
+		expect(
+			health.experiments.find((repo) => repo.name === "showcase")?.team,
+		).toBe("showcase-team");
+	});
+
+
 	it("refuses to link over an existing entry or from inside the workspace", () => {
 		const root = workspace();
 		const external = mkdtempSync(join(tmpdir(), "cosmos-external-"));
@@ -775,20 +883,901 @@ describe("clone failure context", () => {
 	});
 });
 
+describe("team-curated repo lists", () => {
+	function team(name: string, contents?: unknown) {
+		const path = mkdtempSync(join(tmpdir(), `cosmos-team-${name}-`));
+		if (contents !== undefined) {
+			writeFileSync(join(path, TEAM_REPOS_FILE), JSON.stringify(contents));
+		}
+		return { name, path };
+	}
+
+	it("replaces the built-in repos when a team publishes its own", () => {
+		const repos = resolveCoreRepos([
+			team("design-ops", { repos: ["cosmos-ai", "design-system"] }),
+		]);
+
+		expect(repos.map((repo) => repo.name)).toEqual([
+			"cosmos-ai",
+			"design-system",
+		]);
+	});
+
+	// Nobody has authored one of these files yet, so the untouched path is the
+	// one almost everybody takes.
+	it("falls back to the built-in repos when no team declares any", () => {
+		expect(resolveCoreRepos([])).toEqual(DEFAULT_CORE_REPOS);
+		expect(resolveCoreRepos([team("no-file")])).toEqual(DEFAULT_CORE_REPOS);
+		expect(resolveCoreRepos([team("empty", { repos: [] })])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+		expect(resolveCoreRepos([team("wrong-shape", { repos: "neutron" })])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+	});
+
+	it("survives a malformed file rather than emptying the home screen", () => {
+		const broken = mkdtempSync(join(tmpdir(), "cosmos-team-broken-"));
+		writeFileSync(join(broken, TEAM_REPOS_FILE), "{ not json");
+
+		expect(resolveCoreRepos([{ name: "broken", path: broken }])).toEqual(
+			DEFAULT_CORE_REPOS,
+		);
+	});
+
+	it("unions across teams and keeps the first spelling of a repeat", () => {
+		const repos = resolveCoreRepos([
+			team("first", { org: "shipt", repos: ["neutron"] }),
+			team("second", { repos: [{ name: "neutron", org: "other" }, "segway-next"] }),
+		]);
+
+		expect(repos).toEqual([
+			{ name: "neutron", org: "shipt" },
+			{ name: "segway-next" },
+		]);
+	});
+
+	it("applies a per-repo org over the team org", () => {
+		const repos = resolveCoreRepos([
+			team("mixed", {
+				org: "shipt",
+				repos: ["neutron", { name: "widget", org: "acme-co" }],
+			}),
+		]);
+
+		expect(coreRepoCloneUrl("neutron", repos[0]?.org)).toBe(
+			"git@github.com:shipt/neutron.git",
+		);
+		expect(coreRepoCloneUrl("widget", repos[1]?.org)).toBe(
+			"git@github.com:acme-co/widget.git",
+		);
+	});
+
+	// These names reach both mkdir and a clone URL, so a bad one is worse than a
+	// missing one.
+	it("drops names that would escape the workspace or the URL path", () => {
+		const repos = resolveCoreRepos([
+			team("sloppy", {
+				repos: ["../evil", "a/b", ".git", "", "  ", 7, { name: "good-repo" }],
+			}),
+		]);
+
+		expect(repos).toEqual([{ name: "good-repo" }]);
+	});
+
+	it("re-sorts siblings into experiments when the core list changes", () => {
+		const root = mkdtempSync(join(tmpdir(), "cosmos-workspace-"));
+		mkdirSync(join(root, "neutron"), { recursive: true });
+		const declared = resolveCoreRepos([
+			team("design-ops", { repos: ["design-system"] }),
+		]);
+		const health = inspectWorkspace(root, undefined, [], declared);
+
+		// neutron is built-in but unlisted here, so it demotes to an experiment.
+		expect(health.repos.map((repo) => repo.name)).toEqual(["design-system"]);
+		expect(health.experiments.map((repo) => repo.name)).toEqual(["neutron"]);
+	});
+});
+
 describe("core repo list", () => {
 	// shipt/nebula never existed. It sat in this list unnoticed because the list
 	// started life as folder names to look for, and only later became the source
 	// of clone URLs, where a name that is merely wrong turns into a 404.
 	it("lists repos that exist, not folder labels", () => {
 		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
-			expect(isCoreRepoName(name)).toBe(true);
+			expect(findCoreRepo(name)).toBeDefined();
 		}
-		expect(isCoreRepoName("nebula")).toBe(false);
+		expect(findCoreRepo("nebula")).toBeUndefined();
 	});
 
 	it("builds a clone URL for every core repo", () => {
 		for (const name of ["cosmos-ai", "segway-next", "neutron", "design-system"]) {
 			expect(coreRepoCloneUrl(name)).toBe(`git@github.com:shipt/${name}.git`);
 		}
+	});
+});
+
+// Root listings captured from the real shipt org. Genuine team layers match four or
+// more layer markers here; product repos that merely carry one of the same filenames
+// match exactly one, which is the margin the classifier relies on.
+const REAL_ROOTS: Record<string, string[]> = {
+	"business-reports-team-context":
+		".gitignore README.md bin copilot-instructions.md infraspec.yaml instructions packs profiles skills".split(" "),
+	"cosmos-ai":
+		".github .gitignore README.md copilot-instructions.md disabled.json docs infraspec.yaml mcp-config.json scripts skills".split(" "),
+	designos:
+		".github README.md agents bin copilot-instructions.md disabled.json infraspec.yaml mcp-config.json skills".split(" "),
+	"glayvin-incident-management":
+		".github AGENTS.md README.md agents bin cmd configs copilot-instructions.md disabled.json docs go.mod go.sum infraspec.yaml internal skills templates".split(" "),
+	"glayvin-team-template":
+		"README.md agents bin copilot-instructions.md disabled.json infraspec.yaml mcp-config.json skills".split(" "),
+	"ux-ai-context":
+		".github .local README.md agents bin copilot-instructions.md disabled.json doc infraspec.yaml mcp-config.json projects schemas skills team-config.json".split(" "),
+	"fulfillment-engine":
+		".github Dockerfile Makefile README.md alerts.yaml cmd copilot-instructions.md docker-compose.yml go.mod go.sum infraspec.yaml internal migrations terraform vendor".split(" "),
+	locations:
+		".github Dockerfile Makefile README.md cmd copilot-instructions.md docker-compose.yml go.mod go.sum internal migrations terraform test tools".split(" "),
+	"marketplace-agent":
+		".github Dockerfile Makefile README.md agent cmd docker-compose.yml go.mod go.sum internal mcp-config.json migrations terraform".split(" "),
+	"spotter-agent":
+		".github Dockerfile Makefile README.md agent cmd docker-compose.yml go.mod go.sum internal mcp-config.json migrations terraform".split(" "),
+	"promo-planning-tool":
+		".github Dockerfile Makefile README.md app copilot-instructions.md docker-compose.yaml docs infraspec.yaml models pyproject.toml stubs tests".split(" "),
+	"shopper-temporal":
+		".github AGENTS.md Dockerfile README.md alerts.yaml copilot-instructions.md dynamicconfig infraspec.yaml terraform thanos".split(" "),
+	"timeslot-risk-ml-calculator":
+		".github Dockerfile Makefile README.md app copilot-instructions.md dags docker-compose.yml docs infraspec.yaml pyproject.toml scripts terraform tests".split(" "),
+};
+
+describe("team classification", () => {
+	const classOf = (repo: string) =>
+		classifyRoot(repo, REAL_ROOTS[repo]).classification;
+
+	// Canary. These four are known-good team layers, captured from the real org and
+	// re-verified against live GitHub. If this fails, the classifier has drifted and
+	// discovery will return a plausible-looking but wrong "nothing found" — check
+	// LAYER_MARKERS and the layers >= 3 threshold before trusting an empty pane.
+	it("accepts the real team layers in the org", () => {
+		for (const repo of [
+			"business-reports-team-context",
+			"cosmos-ai",
+			"designos",
+			"ux-ai-context",
+		]) {
+			expect(classOf(repo)).toBe("team");
+		}
+	});
+
+	// A layer that also ships a Go binary must not be vetoed by its product files,
+	// which is why three layer markers decide on their own.
+	it("keeps a team layer that also ships a service", () => {
+		const result = classifyRoot(
+			"glayvin-incident-management",
+			REAL_ROOTS["glayvin-incident-management"],
+		);
+		expect(result.classification).toBe("team");
+		expect(result.markers.filter((m) => m.kind === "product").length).toBeGreaterThan(0);
+	});
+
+	// These carry copilot-instructions.md or mcp-config.json and nothing else, which is
+	// why no single marker search can be trusted on its own.
+	it("rejects product repos that merely carry one marker", () => {
+		for (const repo of [
+			"fulfillment-engine",
+			"locations",
+			"marketplace-agent",
+			"spotter-agent",
+			"promo-planning-tool",
+			"shopper-temporal",
+			"timeslot-risk-ml-calculator",
+		]) {
+			expect(classOf(repo)).toBe("uncertain");
+		}
+	});
+
+	it("marks the template rather than offering it as a team", () => {
+		expect(classOf("glayvin-team-template")).toBe("template");
+	});
+
+	it("separates real layers from product repos by a wide margin", () => {
+		const layerCount = (repo: string) =>
+			classifyRoot(repo, REAL_ROOTS[repo]).markers.filter((m) => m.kind === "layer")
+				.length;
+		const layers = ["cosmos-ai", "designos", "ux-ai-context"].map(layerCount);
+		const products = ["fulfillment-engine", "marketplace-agent", "locations"].map(
+			layerCount,
+		);
+		expect(Math.min(...layers)).toBeGreaterThan(Math.max(...products) + 1);
+	});
+
+	it("flags a layer that curates the home screen repo list", () => {
+		expect(classifyRoot("x", ["copilot-instructions.md", "packs", "cosmos-repos.json"]))
+			.toMatchObject({ classification: "team", curatesRepos: true });
+		expect(classifyRoot("x", REAL_ROOTS["cosmos-ai"]).curatesRepos).toBe(false);
+	});
+
+	it("reports every marker it matched so the heuristic stays visible", () => {
+		const names = classifyRoot("designos", REAL_ROOTS.designos).markers.map(
+			(m) => m.name,
+		);
+		expect(names).toContain("copilot-instructions.md");
+		expect(names).toContain("skills");
+		expect(names).not.toContain("README.md");
+	});
+});
+
+describe("team search parsing", () => {
+	const item = (over: Record<string, unknown> = {}) => ({
+		path: "disabled.json",
+		repo: "designos",
+		description: "Design system context",
+		htmlUrl: "https://github.com/shipt/designos",
+		fork: false,
+		...over,
+	});
+
+	it("builds a root-scoped query per marker", () => {
+		expect(searchQuery("shipt", "disabled.json")).toBe(
+			"org:shipt filename:disabled.json path:/",
+		);
+		const args = searchArgs("shipt", "disabled.json");
+		expect(args.join(" ")).toContain(
+			encodeURIComponent("org:shipt filename:disabled.json path:/"),
+		);
+	});
+
+	it("keeps root-level hits and drops nested ones", () => {
+		const hits = parseSearchHits(
+			JSON.stringify([item(), item({ repo: "other", path: "nested/disabled.json" })]),
+		);
+		expect(hits.hits.map((h) => h.repo)).toEqual(["designos"]);
+	});
+
+	it("drops forks and invalid repo names", () => {
+		const hits = parseSearchHits(
+			JSON.stringify([
+				item({ repo: "forked", fork: true }),
+				item({ repo: "../escape" }),
+				item(),
+			]),
+		);
+		expect(hits.hits.map((h) => h.repo)).toEqual(["designos"]);
+	});
+
+	it("discards GitHub's placeholder descriptions", () => {
+		const { hits: [hit] } = parseSearchHits(
+			JSON.stringify([
+				item({ repo: "glayvin-delivery", description: "Default description for glayvin-delivery" }),
+			]),
+		);
+		expect(hit.description).toBeUndefined();
+	});
+
+	// `gh` exits 0 while printing this, so an unreadable reply must not look like an
+	// org with no teams. `gh search code` returning `[]` is the real-world case.
+	it("marks a reply that is not JSON as unreadable", () => {
+		expect(parseSearchHits("gh: rate limit exceeded")).toEqual({
+			hits: [],
+			readable: false,
+		});
+	});
+
+	it("marks JSON that is not an array as unreadable", () => {
+		expect(parseSearchHits('{"message":"Not Found"}').readable).toBe(false);
+	});
+
+	it("treats an empty array as a readable, genuinely empty result", () => {
+		expect(parseSearchHits("[]")).toEqual({ hits: [], readable: true });
+	});
+
+	it("unions the marker searches and keeps the best description", () => {
+		const union = unionSearchHits([
+			[{ repo: "b", htmlUrl: "u" }],
+			[{ repo: "b", htmlUrl: "u", description: "found later" }],
+			[{ repo: "a", htmlUrl: "u" }],
+		]);
+		expect(union.map((h) => h.repo)).toEqual(["a", "b"]);
+		expect(union[1].description).toBe("found later");
+	});
+
+	it("reads the root listing as one name per line", () => {
+		expect(parseRootNames("agents\nskills\n\n  packs  \n")).toEqual([
+			"agents",
+			"skills",
+			"packs",
+		]);
+	});
+
+	it("recognises a rate-limited reply", () => {
+		expect(isRateLimited({ stdout: "", stderr: "API rate limit exceeded", code: 1 })).toBe(true);
+		expect(isRateLimited({ stdout: "", stderr: "could not resolve host", code: 1 })).toBe(false);
+	});
+});
+
+describe("team discovery cache", () => {
+	const candidate = {
+		repo: "designos",
+		htmlUrl: "https://github.com/shipt/designos",
+		markers: [{ name: "skills", kind: "layer" as const }],
+		classification: "team" as const,
+		curatesRepos: false,
+	};
+
+	it("round-trips a snapshot", () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-cache-"));
+		writeCache(dir, "shipt", [candidate], 1234);
+		expect(readCache(dir, "shipt")).toEqual({
+			fetchedAt: 1234,
+			candidates: [candidate],
+		});
+	});
+
+	// Switching orgs must not show the previous org's teams.
+	it("ignores a snapshot taken for another org", () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-cache-"));
+		writeCache(dir, "shipt", [candidate], 1234);
+		expect(readCache(dir, "other-org")).toBeUndefined();
+	});
+
+	it("ignores a corrupt or unversioned file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-cache-"));
+		writeFileSync(join(dir, "team-discovery.json"), "{ not json", "utf8");
+		expect(readCache(dir, "shipt")).toBeUndefined();
+		writeFileSync(
+			join(dir, "team-discovery.json"),
+			JSON.stringify({ version: 99, org: "shipt", fetchedAt: 1, candidates: [] }),
+			"utf8",
+		);
+		expect(readCache(dir, "shipt")).toBeUndefined();
+	});
+
+	it("reports no snapshot when none was ever written", () => {
+		expect(readCache(mkdtempSync(join(tmpdir(), "teams-cache-")), "shipt")).toBeUndefined();
+	});
+});
+
+describe("team discovery", () => {
+	/** A fake gh/glayvin that answers from a script of matchers, in call order. */
+	function fakeRunner(
+		handlers: {
+			match: (file: string, args: string[]) => boolean;
+			reply: CommandResult;
+		}[],
+		calls: string[] = [],
+	) {
+		const run = async (file: string, args: string[]): Promise<CommandResult> => {
+			calls.push(`${file} ${args.join(" ")}`);
+			const hit = handlers.find((h) => h.match(file, args));
+			return hit ? hit.reply : { stdout: "", stderr: "no match", code: 1 };
+		};
+		return { run, calls };
+	}
+
+	const ok = (stdout: string): CommandResult => ({ stdout, stderr: "", code: 0 });
+	const fail = (stderr: string): CommandResult => ({ stdout: "", stderr, code: 1 });
+	const found = (repo: string) =>
+		ok(JSON.stringify([{ path: "disabled.json", repo, htmlUrl: `https://github.com/shipt/${repo}`, fork: false }]));
+
+	const baseOptions = (dir: string, run: CommandRunner) => ({
+		org: "shipt",
+		userDataDir: dir,
+		workspaceRootPath: join(dir, "workspace"),
+		glayvinHome: join(dir, ".glayvin"),
+		teams: [],
+		run,
+		now: () => 5000,
+	});
+
+	const happyHandlers = [
+		{ match: (_f: string, a: string[]) => a[0] === "which", reply: ok("/usr/bin/tool") },
+		{ match: (_f: string, a: string[]) => a[0] === "auth", reply: ok("Logged in") },
+		{ match: (_f: string, a: string[]) => a[1]?.includes("Accept") === true || a.some((x) => x.includes("/search/code")), reply: found("designos") },
+		{ match: (_f: string, a: string[]) => a.some((x) => x.includes("contents")), reply: ok(REAL_ROOTS.designos.join("\n")) },
+	];
+
+	it("classifies and lists what the searches turned up", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner(happyHandlers);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(true);
+		expect(result.fromCache).toBe(false);
+		expect(result.teams).toHaveLength(1);
+		expect(result.teams[0]).toMatchObject({
+			repo: "designos",
+			classification: "team",
+			nameWithOwner: "shipt/designos",
+			cloneUrl: "git@github.com:shipt/designos.git",
+			membership: undefined,
+		});
+	});
+
+	// Opening Settings must not fire ~20 API calls every time.
+	it("serves the cache without touching the network until asked to refresh", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+
+		const second = fakeRunner(happyHandlers);
+		const cached = await discoverTeams(baseOptions(dir, second.run));
+		expect(cached.fromCache).toBe(true);
+		expect(cached.fetchedAt).toBe(5000);
+		expect(cached.teams).toHaveLength(1);
+		expect(second.calls.some((c) => c.includes("/search/code"))).toBe(false);
+
+		const third = fakeRunner(happyHandlers);
+		const refreshed = await discoverTeams({
+			...baseOptions(dir, third.run),
+			refresh: true,
+		});
+		expect(refreshed.fromCache).toBe(false);
+		expect(third.calls.some((c) => c.includes("/search/code"))).toBe(true);
+	});
+
+	it("marks a registered team as joined", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const teamPath = join(dir, "workspace", "designos");
+		mkdirSync(teamPath, { recursive: true });
+		const result = await discoverTeams({
+			...baseOptions(dir, fakeRunner(happyHandlers).run),
+			teams: [{ name: "designos", path: teamPath }],
+		});
+		expect(result.teams[0].membership).toMatchObject({
+			name: "designos",
+			path: teamPath,
+			state: "active",
+		});
+	});
+
+	it("spots a clone that was never registered", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		mkdirSync(join(dir, "workspace", "designos"), { recursive: true });
+		const result = await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+		expect(result.teams[0].membership).toBeUndefined();
+		expect(result.teams[0].clonedPath).toBe(join(dir, "workspace", "designos"));
+	});
+
+	it("explains itself when gh is missing instead of throwing", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which" && a[1] === "glayvin", reply: ok("/bin/glayvin") },
+			{ match: (_f, a) => a[0] === "which" && a[1] === "gh", reply: fail("not found") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		expect(result.notes.join(" ")).toContain("gh auth login");
+		expect(result.teams).toEqual([]);
+	});
+
+	it("explains itself when gh is signed out", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: fail("not logged in") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		expect(result.notes.join(" ")).toContain("not signed in");
+	});
+
+	// Discovery is still useful without the CLI; only joining is off.
+	it("still lists teams when glayvin is missing, but cannot join", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which" && a[1] === "glayvin", reply: fail("not found") },
+			...happyHandlers,
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(true);
+		expect(result.canJoin).toBe(false);
+		expect(result.notes.join(" ")).toContain("glayvin manage teams add");
+	});
+
+	// A half-finished union would cache a list missing whole teams.
+	it("keeps the previous snapshot when a refresh is rate limited", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{
+				match: (_f, a) => a.some((x) => x.includes("/search/code")),
+				reply: { stdout: "", stderr: "API rate limit exceeded", code: 1 },
+			},
+		]);
+		const result = await discoverTeams({ ...baseOptions(dir, run), refresh: true });
+		expect(result.available).toBe(true);
+		expect(result.fromCache).toBe(true);
+		expect(result.teams).toHaveLength(1);
+		expect(result.notes.join(" ")).toContain("rate limit");
+		expect(readCache(dir, "shipt")?.candidates).toHaveLength(1);
+	});
+
+	it("fails softly on the very first refresh when there is no snapshot", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{ match: (_f, a) => a.some((x) => x.includes("/search/code")), reply: fail("could not resolve host") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		expect(result.teams).toEqual([]);
+		expect(result.notes.join(" ")).toContain("could not resolve host");
+	});
+
+	// A repo whose root will not list is not thereby proven innocent or guilty.
+	it("keeps a candidate whose root cannot be read, marked uncertain", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			...happyHandlers.slice(0, 3),
+			{ match: (_f, a) => a.some((x) => x.includes("contents")), reply: fail("404") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.teams[0].classification).toBe("uncertain");
+		expect(result.teams[0].markers).toEqual([]);
+	});
+
+	// The failure this guards: `gh search code` prints `[]` and exits 0 on this org.
+	// Treated as an empty match it becomes a confident, wrong "no teams found".
+	it("treats an unreadable search reply as a failure, not an empty org", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{
+				match: (_f, a) => a.some((x) => x.includes("/search/code")),
+				reply: ok('{"message":"Not Found"}'),
+			},
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(false);
+		const note = result.notes.join(" ");
+		expect(note).toContain("could not read the reply");
+		expect(note).not.toContain("No repos in shipt");
+	});
+
+	// Matching repos while confirming none of them is what a stale classifier looks
+	// like. They still render, hedged, so the note explains the hedge.
+	it("flags a search that confirmed none of what it matched", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			...happyHandlers.slice(0, 3),
+			{
+				match: (_f, a) => a.some((x) => x.includes("contents")),
+				reply: ok(REAL_ROOTS.locations.join("\n")),
+			},
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.survey).toMatchObject({ matched: 1, teams: 0, uncertain: 1 });
+		expect(result.notes.join(" ")).toContain("could not confirm any of them");
+	});
+
+	it("counts what it classified so an empty pane can explain itself", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const result = await discoverTeams(
+			baseOptions(dir, fakeRunner(happyHandlers).run),
+		);
+		expect(result.survey).toMatchObject({ matched: 1, teams: 1, uncertain: 0 });
+		expect(result.survey?.markers).toContain("copilot-instructions.md");
+		// A healthy result should not be nagging about anything.
+		expect(result.notes.join(" ")).not.toContain("could not confirm");
+	});
+
+	it("keeps the survey when serving from cache", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		await discoverTeams(baseOptions(dir, fakeRunner(happyHandlers).run));
+		const cached = await discoverTeams(
+			baseOptions(dir, fakeRunner(happyHandlers).run),
+		);
+		expect(cached.fromCache).toBe(true);
+		expect(cached.survey).toMatchObject({ matched: 1, teams: 1 });
+	});
+
+	it("falls back to the default org when the setting is unusable", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const result = await discoverTeams({
+			...baseOptions(dir, fakeRunner(happyHandlers).run),
+			org: "not a valid org!",
+		});
+		expect(result.org).toBe("shipt");
+	});
+
+	it("says so plainly when the org has no team repos", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "teams-"));
+		const { run } = fakeRunner([
+			{ match: (_f, a) => a[0] === "which", reply: ok("/bin/tool") },
+			{ match: (_f, a) => a[0] === "auth", reply: ok("Logged in") },
+			{ match: (_f, a) => a.some((x) => x.includes("/search/code")), reply: ok("[]") },
+		]);
+		const result = await discoverTeams(baseOptions(dir, run));
+		expect(result.available).toBe(true);
+		expect(result.teams).toEqual([]);
+		// An empty result has to say what it looked for, or it is indistinguishable
+		// from a search that did not work.
+		const note = result.notes.join(" ");
+		expect(note).toContain("No repos in shipt");
+		expect(note).toContain("mcp-config.json");
+		expect(note).toContain("copilot-instructions.md");
+		expect(result.survey).toMatchObject({ matched: 0, teams: 0, uncertain: 0 });
+	});
+});
+
+describe("registering a Glayvin team", () => {
+	it("hands the work to the glayvin CLI", async () => {
+		const calls: string[][] = [];
+		await registerGlayvinTeam({
+			name: "designos",
+			path: "/Users/x/Cosmos/designos",
+			run: async (file, args) => {
+				calls.push([file, ...args]);
+				return { stdout: "Added", stderr: "", code: 0 };
+			},
+		});
+		expect(calls[0]).toEqual([
+			"glayvin",
+			"manage",
+			"teams",
+			"add",
+			"designos",
+			"/Users/x/Cosmos/designos",
+		]);
+	});
+
+	it("surfaces the CLI's own complaint rather than an exit code", async () => {
+		await expect(
+			registerGlayvinTeam({
+				name: "designos",
+				path: "/tmp/designos",
+				run: async () => ({ stdout: "", stderr: "Team already exists\nmore", code: 1 }),
+			}),
+		).rejects.toThrow("Team already exists");
+	});
+});
+
+describe("reading Glayvin team state", () => {
+	const home = (files: Record<string, string>) => {
+		const dir = mkdtempSync(join(tmpdir(), "gv-"));
+		mkdirSync(join(dir, ".local"), { recursive: true });
+		for (const [name, body] of Object.entries(files)) {
+			writeFileSync(join(dir, ".local", name), body);
+		}
+		return dir;
+	};
+
+	it("reads disabled team names", () => {
+		const dir = home({
+			"disabled.json": JSON.stringify({ teams: ["designos", " cosmos-ai "] }),
+		});
+		expect(readDisabledTeamNames(dir)).toEqual(["designos", "cosmos-ai"]);
+	});
+
+	it("treats a missing or malformed disabled.json as nothing disabled", () => {
+		expect(readDisabledTeamNames(home({}))).toEqual([]);
+		expect(readDisabledTeamNames(home({ "disabled.json": "{" }))).toEqual([]);
+		expect(
+			readDisabledTeamNames(home({ "disabled.json": JSON.stringify({}) })),
+		).toEqual([]);
+		expect(readDisabledTeamNames(undefined)).toEqual([]);
+	});
+
+	it("reports relative-path teams that readGlayvinTeams drops", () => {
+		const dir = home({
+			"glayvin.json": JSON.stringify({
+				teams: [
+					{ name: "absolute", path: "/tmp/absolute" },
+					{ name: "relative", path: "./team" },
+				],
+			}),
+		});
+		expect(readGlayvinTeams(dir).map((t) => t.name)).toEqual(["absolute"]);
+		expect(readRegisteredTeamNames(dir)).toEqual(["absolute", "relative"]);
+	});
+});
+
+describe("resolving team membership", () => {
+	const ctx = (over: Partial<Parameters<typeof resolveMembership>[3]> = {}) => ({
+		disabled: [],
+		registered: [],
+		exists: () => true,
+		...over,
+	});
+
+	it("matches by the registered name, not the expected path", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/elsewhere/designos" }],
+			ctx({ registered: ["designos"] }),
+		);
+		expect(membership).toMatchObject({
+			state: "active",
+			path: "/elsewhere/designos",
+			elsewhere: true,
+		});
+	});
+
+	it("falls back to the path when the team was registered under another name", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "design-system", path: "/ws/designos" }],
+			ctx(),
+		);
+		expect(membership).toMatchObject({
+			name: "design-system",
+			state: "active",
+			elsewhere: false,
+		});
+	});
+
+	it("reports a disabled team as registered but not applied", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/ws/designos" }],
+			ctx({ disabled: ["designos"] }),
+		);
+		expect(membership?.state).toBe("disabled");
+	});
+
+	it("reports a team whose folder is gone, mirroring the resolver's existsSync", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/ws/designos" }],
+			ctx({ exists: () => false }),
+		);
+		expect(membership?.state).toBe("missing");
+	});
+
+	it("prefers disabled over missing, since re-enabling alone would not help", () => {
+		const membership = resolveMembership(
+			"designos",
+			"/ws/designos",
+			[{ name: "designos", path: "/ws/designos" }],
+			ctx({ disabled: ["designos"], exists: () => false }),
+		);
+		expect(membership?.state).toBe("disabled");
+	});
+
+	it("keeps a relative-path team visible rather than showing it as unjoined", () => {
+		const membership = resolveMembership("designos", "/ws/designos", [], {
+			disabled: [],
+			registered: ["designos"],
+			exists: () => true,
+		});
+		expect(membership).toMatchObject({ state: "unresolved", path: "" });
+	});
+
+	it("returns nothing for a repo that was never registered", () => {
+		expect(
+			resolveMembership("designos", "/ws/designos", [], ctx()),
+		).toBeUndefined();
+	});
+});
+
+describe("toggling a Glayvin team", () => {
+	it("enables and disables by the registered name", async () => {
+		const calls: string[][] = [];
+		const run: CommandRunner = async (file, args) => {
+			calls.push([file, ...args]);
+			return { code: 0, stdout: "", stderr: "" };
+		};
+		await setGlayvinTeamEnabled({ name: "designos", enabled: false, run });
+		await setGlayvinTeamEnabled({ name: "designos", enabled: true, run });
+		expect(calls).toEqual([
+			["glayvin", "manage", "teams", "disable", "designos"],
+			["glayvin", "manage", "teams", "enable", "designos"],
+		]);
+	});
+
+	it("surfaces the CLI's own complaint", async () => {
+		const run: CommandRunner = async () => ({
+			code: 1,
+			stdout: "",
+			stderr: "Unknown team: designos\nusage: ...",
+		});
+		await expect(
+			setGlayvinTeamEnabled({ name: "designos", enabled: true, run }),
+		).rejects.toThrow("Unknown team: designos");
+	});
+});
+
+describe("pointing the glayvin CLI at the right home", () => {
+	it("passes GLAYVIN_HOME so writes land where the pane reads", async () => {
+		const run = createCommandRunner({ PATH: "/usr/bin:/bin" }, "/tmp/fake-home");
+		const result = await run(
+			"/usr/bin/env",
+			["sh", "-c", "printf %s \"$GLAYVIN_HOME\""],
+			5000,
+		);
+		expect(result.stdout).toBe("/tmp/fake-home");
+	});
+
+	it("leaves GLAYVIN_HOME alone when no home is known", async () => {
+		const run = createCommandRunner({ PATH: "/usr/bin:/bin" });
+		const result = await run(
+			"/usr/bin/env",
+			["sh", "-c", "printf %s \"${GLAYVIN_HOME:-unset}\""],
+			5000,
+		);
+		expect(result.stdout).toBe("unset");
+	});
+});
+
+describe("team precedence", () => {
+	const teams = [
+		{ name: "first", path: "/ws/first" },
+		{ name: "second", path: "/ws/second" },
+		{ name: "third", path: "/ws/third" },
+	];
+	const ctx = (over = {}) => ({
+		disabled: [],
+		registered: teams.map((t) => t.name),
+		exists: () => true,
+		...over,
+	});
+
+	it("ranks in registration order, not alphabetically", () => {
+		expect([...effectivePrecedence(teams, ctx()).entries()]).toEqual([
+			["first", 1],
+			["second", 2],
+			["third", 3],
+		]);
+	});
+
+	// readEnabledTeamDirs drops these before the resolver ever sees them.
+	it("gives a disabled team no slot and closes the gap behind it", () => {
+		const ranks = effectivePrecedence(teams, ctx({ disabled: ["first"] }));
+		expect(ranks.get("first")).toBeUndefined();
+		expect(ranks.get("second")).toBe(1);
+		expect(ranks.get("third")).toBe(2);
+	});
+
+	it("gives a team whose folder is gone no slot either", () => {
+		const ranks = effectivePrecedence(
+			teams,
+			ctx({ exists: (p: string) => p !== "/ws/second" }),
+		);
+		expect(ranks.get("first")).toBe(1);
+		expect(ranks.get("second")).toBeUndefined();
+		expect(ranks.get("third")).toBe(2);
+	});
+
+	it("carries the rank onto an active membership", () => {
+		const membership = resolveMembership("second", "/ws/second", teams, ctx());
+		expect(membership).toMatchObject({ state: "active", precedence: 2 });
+	});
+
+	it("leaves a disabled team unranked, since it is not in the order at all", () => {
+		const membership = resolveMembership(
+			"second",
+			"/ws/second",
+			teams,
+			ctx({ disabled: ["second"] }),
+		);
+		expect(membership?.state).toBe("disabled");
+		expect(membership?.precedence).toBeUndefined();
+	});
+
+	it("leaves a relative-path team unranked, its position depending on cwd", () => {
+		const membership = resolveMembership("ghost", "/ws/ghost", teams, {
+			disabled: [],
+			registered: ["ghost"],
+			exists: () => true,
+		});
+		expect(membership).toMatchObject({ state: "unresolved" });
+		expect(membership?.precedence).toBeUndefined();
+	});
+
+	it("a newly appended team outranks every existing one", () => {
+		const after = [...teams, { name: "joined", path: "/ws/joined" }];
+		const ranks = effectivePrecedence(after, {
+			disabled: [],
+			registered: after.map((t) => t.name),
+			exists: () => true,
+		});
+		expect(ranks.get("joined")).toBe(4);
+		expect(Math.max(...ranks.values())).toBe(ranks.get("joined"));
 	});
 });
