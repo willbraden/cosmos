@@ -2546,6 +2546,13 @@ select {
 	color: var(--color-foreground-neutral-default-strong);
 }
 
+.home-hero-wordmark {
+	font-size: 32px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	line-height: 1.2;
+}
+
 .home-composer-card {
 	border: 1px solid var(--color-border-neutral-normal);
 	border-radius: var(--border-radius-16);
