@@ -6,6 +6,31 @@ import type { ExtensionUiRequest, PiRecord } from "./pi-types";
 export type PermissionMode = "ask" | "acceptEdits" | "auto";
 export type ThemePreference = "system" | "light" | "dark";
 
+/**
+ * The three colours a mode is built from. Everything else in the palette —
+ * panels, borders, muted text — is derived from these, so the UI stays
+ * internally consistent whatever the user picks.
+ */
+export interface ThemeSeeds {
+	/** Page background. */
+	bg: string;
+	/** Primary text. */
+	fg: string;
+	/** Accent for selected/primary surfaces. */
+	accent: string;
+}
+
+export interface ThemeSeedSet {
+	light: ThemeSeeds;
+	dark: ThemeSeeds;
+}
+
+/** Monochrome by default: near-black on white, near-white on black. */
+export const DEFAULT_THEME_SEEDS: ThemeSeedSet = {
+	light: { bg: "#ffffff", fg: "#1a1a1a", accent: "#1a1a1a" },
+	dark: { bg: "#0b0b0b", fg: "#f2f2f2", accent: "#f2f2f2" },
+};
+
 /** Drag-to-resize bounds for the expanded sidebar, in pixels. */
 export const SIDEBAR_MIN_WIDTH = 275;
 export const SIDEBAR_MAX_WIDTH = 600;
@@ -50,6 +75,10 @@ export interface DesktopSettings {
 	developerMode: boolean;
 	/** When enabled, Cosmos can use chat context to pause likely Figma-design prompts until Figma MCP is available. */
 	figmaChatContextGate: boolean;
+	/** Per-mode colour seeds the rest of the palette is derived from. */
+	themeSeeds: ThemeSeedSet;
+	/** Drifting star field behind the home page. Home only — never on a session. */
+	homeConstellations: boolean;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -71,6 +100,8 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
 	sidebarWidth: SIDEBAR_MIN_WIDTH,
 	developerMode: false,
 	figmaChatContextGate: false,
+	themeSeeds: DEFAULT_THEME_SEEDS,
+	homeConstellations: true,
 };
 
 export interface SessionSummary {
