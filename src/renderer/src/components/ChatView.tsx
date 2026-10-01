@@ -220,7 +220,7 @@ export function ChatView({ tab }: { tab: TabState }) {
 				<FigmaChatAssist tab={tab} />
 				{tab.status === "starting" && tab.chat.items.length === 0 ? (
 					<div className="empty">
-						<SpinnerIcon size={20} />
+						<SpinnerIcon size={64} />
 					</div>
 				) : showCenteredComposer ? (
 					<div className="empty-chat-shell">
