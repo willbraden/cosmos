@@ -230,7 +230,7 @@ try {
 
 	await step("new session and reopening the old one restores history", async () => {
 		await evaluate(`document.querySelector('.sidebar-section-row [title^="New session in"]').click()`);
-		await waitFor(`document.body.innerText.includes('Ready when you are')`, "fresh session");
+		await waitFor(`!!document.querySelector('.empty-chat-welcome h1')`, "fresh session");
 		await clickText(".session-row", "Hello there");
 		await waitFor(`document.body.innerText.includes('Hello from the fake model') && document.querySelectorAll('.user-msg').length >= 4`, "history restored");
 	});

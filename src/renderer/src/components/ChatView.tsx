@@ -151,16 +151,34 @@ export function ChatHeader({ tab, scrolled }: { tab: TabState; scrolled: boolean
 	);
 }
 
+const WELCOME_PHRASES = [
+	"Begin your exploration.",
+	"What shall we discover?",
+	"Every thought has a universe.",
+	"One thought can go anywhere.",
+	"Wonder where it leads.",
+];
+
+let lastWelcomePhrase = -1;
+
+function nextWelcomePhrase() {
+	let index = Math.floor(Math.random() * WELCOME_PHRASES.length);
+	if (index === lastWelcomePhrase) index = (index + 1) % WELCOME_PHRASES.length;
+	lastWelcomePhrase = index;
+	return WELCOME_PHRASES[index];
+}
+
 function Welcome({ tab }: { tab: TabState }) {
 	const providers = useStore((s) => s.providers);
 	const models = useStore((s) => s.models);
+	const phrase = useMemo(() => nextWelcomePhrase(), [tab.tabId]);
 	const noProvider =
 		tab.status === "ready" &&
 		models.length === 0 &&
 		!providers.some((p) => p.configured);
 	return (
 		<div className="empty-chat-welcome minimal">
-			<h1>Ready when you are.</h1>
+			<h1>{phrase}</h1>
 			{noProvider && (
 				<div className="welcome-card compact">
 					<TriangleAlert
