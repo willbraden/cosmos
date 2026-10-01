@@ -257,6 +257,14 @@ export const PERMISSION_PROMPT_MARKER = "⁣pi-desktop-permission⁣";
  */
 export const PERMISSION_MODE_COMMAND = "desktop-permission-mode";
 
+/**
+ * Slash command the bundled desktop extension registers to move the session leaf back to just
+ * before a user message, so the renderer can re-send it edited. Pi's `fork` RPC writes a whole
+ * new session file; this stays inside the current one and leaves the abandoned branch in place.
+ * Keep in sync with resources/pi-extension/desktop-bridge.ts.
+ */
+export const REWIND_COMMAND = "desktop-rewind";
+
 export interface PermissionPromptPayload {
 	toolCallId: string;
 	toolName: string;

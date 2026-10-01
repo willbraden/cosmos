@@ -20,7 +20,7 @@ import {
 } from "react";
 import { splitThoughts, summarizeBusyWork } from "../lib/activity";
 import { formatTokens } from "../lib/api";
-import { forkFromMessage, parsePermissionPrompt } from "../state/actions";
+import { editMessage, parsePermissionPrompt } from "../state/actions";
 import { isHiddenUserPromptText, type Block, type ChatItem, type ChatState } from "../state/chat-model";
 import type { TabState } from "../state/store";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -108,12 +108,96 @@ function hasActiveReasoningWork(
 const UserMessage = memo(function UserMessage({
 	item,
 	tabId,
-	canFork,
+	canEdit,
 }: {
 	item: Extract<ChatItem, { kind: "user" }>;
 	tabId: string;
-	canFork: boolean;
+	canEdit: boolean;
 }) {
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState(item.text);
+	const textarea = useRef<HTMLTextAreaElement>(null);
+
+	// Leave edit mode if the message is replaced underneath us (e.g. a reload).
+	useEffect(() => {
+		setEditing(false);
+	}, [item.entryId]);
+
+	useLayoutEffect(() => {
+		const el = textarea.current;
+		if (!editing || !el) return;
+		el.style.height = "auto";
+		el.style.height = `${el.scrollHeight}px`;
+	}, [editing, draft]);
+
+	const startEditing = useCallback(() => {
+		setDraft(item.text);
+		setEditing(true);
+		// Focus after the textarea mounts, with the caret at the end.
+		requestAnimationFrame(() => {
+			const el = textarea.current;
+			if (!el) return;
+			el.focus();
+			el.setSelectionRange(el.value.length, el.value.length);
+		});
+	}, [item.text]);
+
+	const cancel = useCallback(() => {
+		setEditing(false);
+		setDraft(item.text);
+	}, [item.text]);
+
+	const save = useCallback(() => {
+		const entryId = item.entryId;
+		if (!entryId) return;
+		const trimmed = draft.trim();
+		if (!trimmed || trimmed === item.text.trim()) {
+			cancel();
+			return;
+		}
+		setEditing(false);
+		void editMessage(tabId, entryId, trimmed, item.images);
+	}, [cancel, draft, item.entryId, item.images, item.text, tabId]);
+
+	if (editing) {
+		return (
+			<div className="user-msg editing">
+				<textarea
+					ref={textarea}
+					className="user-edit"
+					value={draft}
+					aria-label="Edit message"
+					onChange={(event) => setDraft(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Escape") {
+							event.preventDefault();
+							cancel();
+						} else if (event.key === "Enter" && !event.shiftKey) {
+							event.preventDefault();
+							save();
+						}
+					}}
+				/>
+				<div className="user-edit-actions">
+					<span className="muted small-text">
+						Replaces everything after this message
+					</span>
+					<button type="button" className="btn" onClick={cancel}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						className="btn primary"
+						onClick={save}
+						disabled={!draft.trim()}
+					>
+						Send
+					</button>
+				</div>
+			</div>
+		);
+	}
+
 	return (
 		<div className="user-msg">
 			{item.images.length > 0 && (
@@ -131,13 +215,13 @@ const UserMessage = memo(function UserMessage({
 			{item.text && <div className="user-bubble">{item.text}</div>}
 			<div className="msg-actions">
 				<CopyButton text={item.text} label="Copy message" />
-				{canFork && item.entryId && (
+				{canEdit && item.entryId && (
 					<button
 						type="button"
 						className="icon-btn"
-						title="Edit — branch a new session from this message"
+						title="Edit — resend from this message"
 						aria-label="Edit message"
-						onClick={() => void forkFromMessage(tabId, item.entryId as string)}
+						onClick={startEditing}
 					>
 						<Pencil size={14} />
 					</button>
@@ -427,7 +511,7 @@ function renderStandaloneItem(item: NonAssistantItem, tab: TabState) {
 	switch (item.kind) {
 		case "user":
 			return (
-				<UserMessage item={item} tabId={tab.tabId} canFork={!tab.isStreaming} />
+				<UserMessage item={item} tabId={tab.tabId} canEdit={!tab.isStreaming} />
 			);
 		case "bash":
 			return <BashItem item={item} />;

@@ -186,6 +186,17 @@ export default function desktopBridge(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("desktop-rewind", {
+		description:
+			"Internal: move the session leaf back to just before a user message, so it can be re-sent edited",
+		handler: async (args, ctx) => {
+			const entryId = args.trim();
+			if (!entryId) throw new Error("Missing entry id to rewind to.");
+			const result = await ctx.navigateTree(entryId);
+			if (result.cancelled) throw new Error("Rewind was cancelled.");
+		},
+	});
+
 	pi.registerCommand("desktop-mcp-auth", {
 		description: "Internal: start MCP auth for a server without exposing the transport command",
 		handler: async (args, ctx) => {

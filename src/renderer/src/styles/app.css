@@ -702,6 +702,59 @@ select {
 	transition: opacity 0.12s;
 }
 
+/* The inline editor needs the full column width, not the bubble's 85% cap. */
+.user-msg.editing {
+	align-self: stretch;
+	max-width: none;
+	align-items: stretch;
+	gap: 8px;
+}
+
+.user-edit {
+	display: block;
+	width: 100%;
+	border: 1px solid var(--color-border-neutral-normal);
+	border-radius: 16px;
+	background: var(--color-background-neutral-default-subtle-idle);
+	padding: 10px 14px;
+	outline: none;
+	resize: none;
+	font: inherit;
+	line-height: 1.5;
+	max-height: 40vh;
+	user-select: text;
+}
+
+.user-edit:focus {
+	border-color: color-mix(
+		in srgb,
+		var(--color-border-brand-strong) 55%,
+		var(--color-border-neutral-normal)
+	);
+	box-shadow: 0 0 0 4px
+		color-mix(
+			in srgb,
+			var(--color-background-brand-default-subtle-idle) 58%,
+			transparent
+		);
+}
+
+.user-edit-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.user-edit-actions .btn {
+	height: 28px;
+	padding: 0 11px;
+}
+
+.user-edit-actions .muted {
+	margin-right: auto;
+}
+
 .user-msg:hover .msg-actions,
 .assistant-msg:hover .msg-actions {
 	opacity: 1;

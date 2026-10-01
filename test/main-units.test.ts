@@ -97,6 +97,7 @@ import {
 	PERMISSION_OPTIONS,
 	PERMISSION_PROMPT_MARKER,
 	permissionNeedsApproval,
+	REWIND_COMMAND,
 } from "../src/shared/pi-types";
 
 describe("JsonlDecoder", () => {
@@ -165,7 +166,7 @@ describe("desktop bridge extension", () => {
 		expect(bridge.parseMode(undefined)).toBeUndefined();
 	});
 
-	it("registers the slash command the host uses for live mode switches", () => {
+	it("registers the slash commands the host drives directly", () => {
 		const previous = process.env.PI_DESKTOP;
 		process.env.PI_DESKTOP = "1";
 		const commands = new Map<string, { handler(args: string): Promise<void> }>();
@@ -180,6 +181,56 @@ describe("desktop bridge extension", () => {
 			else process.env.PI_DESKTOP = previous;
 		}
 		expect([...commands.keys()]).toContain(PERMISSION_MODE_COMMAND);
+		expect([...commands.keys()]).toContain(REWIND_COMMAND);
+	});
+
+	it("rewinds the session tree in place instead of forking a new session file", async () => {
+		const previous = process.env.PI_DESKTOP;
+		process.env.PI_DESKTOP = "1";
+		const commands = new Map<
+			string,
+			{ handler(args: string, ctx: unknown): Promise<void> }
+		>();
+		try {
+			bridge.default({
+				registerCommand: (name: string, spec: unknown) =>
+					commands.set(
+						name,
+						spec as { handler(args: string, ctx: unknown): Promise<void> },
+					),
+				on: () => {},
+			} as never);
+		} finally {
+			if (previous === undefined) delete process.env.PI_DESKTOP;
+			else process.env.PI_DESKTOP = previous;
+		}
+		const rewind = commands.get(REWIND_COMMAND);
+		if (!rewind) throw new Error("rewind command was not registered");
+
+		const navigated: string[] = [];
+		const forked: string[] = [];
+		const ctx = {
+			navigateTree: async (targetId: string) => {
+				navigated.push(targetId);
+				return { cancelled: false };
+			},
+			fork: async (entryId: string) => {
+				forked.push(entryId);
+				return { cancelled: false };
+			},
+		};
+
+		await rewind.handler(" entry-7 ", ctx);
+		expect(navigated).toEqual(["entry-7"]);
+		expect(forked).toEqual([]);
+
+		await expect(rewind.handler("", ctx)).rejects.toThrow(/entry id/i);
+		await expect(
+			rewind.handler("entry-7", {
+				...ctx,
+				navigateTree: async () => ({ cancelled: true }),
+			}),
+		).rejects.toThrow(/cancelled/i);
 	});
 
 	it("agrees with the shared approval mirror the renderer uses", () => {

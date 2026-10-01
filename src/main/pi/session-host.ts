@@ -16,7 +16,7 @@ import type {
 	PiRecord,
 	SessionState,
 } from "../../shared/pi-types";
-import { PERMISSION_MODE_COMMAND } from "../../shared/pi-types";
+import { PERMISSION_MODE_COMMAND, REWIND_COMMAND } from "../../shared/pi-types";
 import { PiProcess } from "./pi-process";
 
 export interface HostEnvironment {
@@ -170,6 +170,21 @@ export class SessionHost {
 		}
 
 		const proc = await this.ensureProcess(tab);
+
+		// Also desktop-only. The bridge extension moves the session leaf in place; pi runs
+		// extension commands without starting a turn, so this must not mark the tab busy
+		// (nothing would ever emit `agent_settled` to clear it).
+		if (command.type === "desktop_rewind") {
+			const entryId = command.entryId;
+			if (typeof entryId !== "string" || !entryId.trim())
+				throw new Error("Invalid entry id");
+			await proc.request({
+				type: "prompt",
+				message: `/${REWIND_COMMAND} ${entryId.trim()}`,
+			});
+			return null;
+		}
+
 		if (
 			command.type === "prompt" ||
 			command.type === "steer" ||

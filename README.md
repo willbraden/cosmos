@@ -19,7 +19,7 @@ A desktop app for the [pi coding agent](https://github.com/earendil-works/pi), w
 - **Composer**: `/` command autocomplete (pi prompt templates, skills, extension commands, and desktop commands), `@` fuzzy file mentions (respects `.gitignore`), and image paste, drag-and-drop, or attach. `!cmd` runs a shell command; `!!cmd` keeps its output out of the model's context.
 - **While pi works**: Enter steers and ⌥Enter queues a follow-up (swappable in Settings). Queued messages are shown and editable. Esc stops, and anything queued returns to the composer.
 - **Model and thinking pickers**, a context-window meter, and session cost.
-- **Edit & fork**: edit any earlier message to branch a new session from it, or fork the whole session.
+- **Edit & fork**: edit any earlier message inline — the conversation rewinds to that point and your revised message is re-sent in the same session (the old branch stays in the session file). `/fork` branches the whole session into a new one.
 - **Changes panel** (⌘⇧D): every file pi changed in the session, with diffs and "open in editor".
 - **Native sign-in** for every pi provider: subscription OAuth (Claude, ChatGPT/Codex, Copilot, …) and API keys, using pi's own login flows. Credentials go to pi's `auth.json`, so the CLI and the app share them.
 - **MCP visibility and local overrides**: Settings → *MCPs* shows the active Glayvin MCP servers, whether OAuth-backed servers have local tokens, and lets you add/edit/remove personal MCP entries in your local Glayvin override file.

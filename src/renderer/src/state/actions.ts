@@ -22,6 +22,7 @@ import {
 import { api, basename, errorMessage } from "../lib/api";
 import { applyThemeSeeds } from "../lib/theme-colors";
 import {
+	activeBranch,
 	applyRecord,
 	type ChatState,
 	chatFromEntries,
@@ -1262,27 +1263,70 @@ export async function renameSessionByPath(
 	if (tab) await renameSession(tab.tabId, name);
 }
 
-/** Edit an earlier message: fork a new session from it and put its text back in the composer. */
-export async function forkFromMessage(
+/**
+ * Edit an earlier message in place: rewind the session leaf to just before it, then re-send the
+ * edited text. Pi keeps the abandoned branch in the same session file, so this stays in the
+ * current tab and never spawns a new session the way `/fork` does.
+ */
+export async function editMessage(
 	tabId: string,
 	entryId: string,
+	text: string,
+	images: ImageContent[] = [],
 ): Promise<void> {
+	const tab = getTab(tabId);
+	if (!tab || tab.isStreaming) return;
+	const trimmed = text.trim();
+	if (!trimmed && images.length === 0) return;
+
+	// Snapshot so a failed rewind can put the transcript back exactly as it was.
+	const previousChat = tab.chat;
+	const cutoff = previousChat.items.findIndex(
+		(item) => item.kind === "user" && item.entryId === entryId,
+	);
+	if (cutoff === -1) return;
+
+	updateTab(tabId, (current) => ({
+		chat: { ...current.chat, items: current.chat.items.slice(0, cutoff) },
+	}));
+
 	try {
-		const result = await cmd<{ text?: string; cancelled: boolean }>(tabId, {
-			type: "fork",
-			entryId,
-		});
-		if (result.cancelled) return;
-		updateTab(tabId, () => ({
-			chat: { items: [], tools: {} },
-			draft: result.text ?? "",
-		}));
-		await loadTab(tabId);
-		useStore.setState((s) => ({ focusComposerTick: s.focusComposerTick + 1 }));
-		toast("info", "Forked into a new session. Edit the message and send.");
-		void refreshSessions();
+		await cmd(tabId, { type: "desktop_rewind", entryId });
+		// Extension command failures surface as `extension_error` records rather than a rejected
+		// request, so confirm the leaf actually moved before replacing the message.
+		const entries = await cmd<{
+			entries: SessionEntry[];
+			leafId: string | null;
+		}>(tabId, { type: "get_entries" });
+		if (
+			activeBranch(entries.entries, entries.leafId).some(
+				(entry) => entry.id === entryId,
+			)
+		) {
+			throw new Error("Could not rewind the session to that message.");
+		}
 	} catch (error) {
+		updateTab(tabId, () => ({ chat: previousChat }));
 		toast("error", errorMessage(error));
+		return;
+	}
+
+	try {
+		await sendPromptMessage(
+			tabId,
+			trimmed,
+			images.map((image, index) => ({
+				id: `edit:${entryId}:${index}`,
+				name: `image-${index + 1}`,
+				image,
+			})),
+		);
+	} catch (error) {
+		// The rewind already happened, so keep the text recoverable in the composer.
+		updateTab(tabId, (current) => ({
+			draft: current.draft ? `${trimmed}\n\n${current.draft}` : trimmed,
+		}));
+		reportSendError(error);
 	}
 }
 
