@@ -1,4 +1,5 @@
 import type { SessionSummary, WorkspaceHealth } from "@shared/ipc";
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "@shared/ipc";
 import {
 	applyManualSessionOrder,
 	compareSessionOrder,
@@ -10,17 +11,17 @@ import {
 	Folder,
 	GitFork,
 	House,
-	MessageCircle,
 	PanelLeftClose,
+	PanelLeftOpen,
 	Pin,
 	Plus,
 	Search,
 	Settings,
-	SquarePen,
 } from "lucide-react";
 import {
 	memo,
 	type DragEvent,
+	type MouseEvent as ReactMouseEvent,
 	useEffect,
 	useMemo,
 	useRef,
@@ -36,18 +37,12 @@ import {
 	exportHtml,
 	openExistingSession,
 	renameSessionByPath,
-	runSearch,
 	showHome,
 	startNewSession,
 	tabForSession,
 	togglePin,
 } from "../state/actions";
-import {
-	activeTab,
-	sessionTitle,
-	type TabState,
-	useStore,
-} from "../state/store";
+import { sessionTitle, type TabState, useStore } from "../state/store";
 
 const GROUP_PREVIEW = 6;
 
@@ -421,27 +416,118 @@ function Group({
 	);
 }
 
-export function Sidebar(_props?: { collapsed?: boolean }) {
+function setSidebarCollapsed(collapsed: boolean): void {
+	useStore.setState((state) => ({
+		settings: { ...state.settings, sidebarCollapsed: collapsed },
+	}));
+	void api.updateSettings({ sidebarCollapsed: collapsed });
+}
+
+function clampWidth(width: number): number {
+	return Math.min(
+		SIDEBAR_MAX_WIDTH,
+		Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)),
+	);
+}
+
+/** Set the width in the store only; callers persist once the gesture ends. */
+function previewWidth(width: number): number {
+	const next = clampWidth(width);
+	useStore.setState((state) => ({
+		settings: { ...state.settings, sidebarWidth: next },
+	}));
+	return next;
+}
+
+function resizeTo(width: number): void {
+	void api.updateSettings({ sidebarWidth: previewWidth(width) });
+}
+
+function openSearch(): void {
+	useStore.setState({ searchOpen: true });
+}
+
+/** Narrow icon rail shown in place of the sidebar when it is collapsed. */
+function CollapsedRail() {
+	const homeActive = useStore((s) => s.activeTabId === null);
+	return (
+		<nav className="sidebar sidebar-rail drag">
+			<div className="sidebar-rail-top no-drag">
+				<button
+					type="button"
+					className="icon-btn"
+					title="Show sidebar (⌘\\)"
+					onClick={() => setSidebarCollapsed(false)}
+				>
+					<PanelLeftOpen size={16} />
+				</button>
+				<button
+					type="button"
+					className={`icon-btn${homeActive ? " active" : ""}`}
+					title="Home"
+					aria-current={homeActive ? "page" : undefined}
+					onClick={() => showHome()}
+				>
+					<House size={16} />
+				</button>
+				<button
+					type="button"
+					className="icon-btn"
+					title="Search sessions (⌘K)"
+					onClick={openSearch}
+				>
+					<Search size={16} />
+				</button>
+			</div>
+			<span className="spacer" />
+			<div className="sidebar-rail-footer no-drag">
+				<button
+					type="button"
+					className="icon-btn"
+					title="Settings (⌘,)"
+					onClick={() => useStore.setState({ settingsPane: "general" })}
+				>
+					<Settings size={16} />
+				</button>
+			</div>
+		</nav>
+	);
+}
+
+export function Sidebar() {
 	const settings = useStore((s) => s.settings);
 	const sessions = useStore((s) => s.sessions);
 	const tabs = useStore((s) => s.tabs);
 	const activeTabId = useStore((s) => s.activeTabId);
 	const homeActive = activeTabId === null;
+	const collapsed = settings.sidebarCollapsed;
 	const [workspaceHealth, setWorkspaceHealth] = useState<WorkspaceHealth | null>(
 		null,
 	);
 	const pinnedPaths = settings.pinnedSessions ?? [];
 	const sidebarSessionOrder = settings.sidebarSessionOrder ?? {};
-	const searchQuery = useStore((s) => s.searchQuery);
-	const searchMatches = useStore((s) => s.searchMatches);
 	const sessionsLoaded = useStore((s) => s.sessionsLoaded);
-	const focusSearchTick = useStore((s) => s.focusSearchTick);
-	const searchRef = useRef<HTMLInputElement>(null);
 	const [dragState, setDragState] = useState<DragState | null>(null);
+	const [resizing, setResizing] = useState(false);
 
-	useEffect(() => {
-		if (focusSearchTick > 0) searchRef.current?.focus();
-	}, [focusSearchTick]);
+	// Drag the right edge to resize. Width is committed to settings on release so
+	// the drag itself never thrashes the settings file.
+	const startResize = (event: ReactMouseEvent<HTMLDivElement>) => {
+		event.preventDefault();
+		setResizing(true);
+		let width = previewWidth(event.clientX);
+		const onMove = (move: MouseEvent) => {
+			width = previewWidth(move.clientX);
+		};
+		const onUp = () => {
+			window.removeEventListener("mousemove", onMove);
+			window.removeEventListener("mouseup", onUp);
+			setResizing(false);
+			void api.updateSettings({ sidebarWidth: width });
+		};
+		window.addEventListener("mousemove", onMove);
+		window.addEventListener("mouseup", onUp);
+	};
 
 	useEffect(() => {
 		let cancelled = false;
@@ -522,23 +608,7 @@ export function Sidebar(_props?: { collapsed?: boolean }) {
 			if (!kinds.has(repo.path)) kinds.set(repo.path, "experiment");
 		return kinds;
 	}, [workspaceHealth]);
-	const query = searchQuery.trim().toLowerCase();
-
-	const { pinnedRows, groups, results } = useMemo(() => {
-		if (query) {
-			const textMatches = new Set(searchMatches ?? []);
-			return {
-				pinnedRows: [],
-				groups: [],
-				results: rows
-					.filter(
-						(row) =>
-							row.title.toLowerCase().includes(query) ||
-							(row.summary && textMatches.has(row.summary.path)),
-					)
-					.sort(compareSessionOrder),
-			};
-		}
+	const { pinnedRows, groups } = useMemo(() => {
 		const byCwd = new Map<string, Row[]>();
 		const pinnedList: Row[] = [];
 		for (const row of rows) {
@@ -562,9 +632,8 @@ export function Sidebar(_props?: { collapsed?: boolean }) {
 		return {
 			pinnedRows: pinnedList.sort(compareSessionOrder),
 			groups: orderedGroups.map(({ cwd, rows }) => [cwd, rows] as const),
-			results: null,
 		};
-	}, [rows, query, searchMatches, pinned, sidebarSessionOrder]);
+	}, [rows, pinned, sidebarSessionOrder]);
 
 	function startDrag(cwd: string, draggingKey: string): void {
 		setDragState({ cwd, draggingKey, overKey: null, placement: "end" });
@@ -644,121 +713,82 @@ export function Sidebar(_props?: { collapsed?: boolean }) {
 		await persistGroupOrder(cwd, nextOrder);
 	}
 
+	if (collapsed) return <CollapsedRail />;
+
 	return (
-		<nav className="sidebar">
+		<nav
+			className={`sidebar${resizing ? " resizing" : ""}`}
+			style={{ width: settings.sidebarWidth ?? SIDEBAR_MIN_WIDTH }}
+		>
 			<div className="sidebar-top drag">
-				<div className="sidebar-top-row">
+				<div className="sidebar-top-row no-drag">
+					<button
+						type="button"
+						className={`sidebar-nav-btn${homeActive ? " active" : ""}`}
+						aria-current={homeActive ? "page" : undefined}
+						onClick={() => showHome()}
+					>
+						<House size={15} /> Home
+					</button>
+					<span className="spacer" />
+					<button
+						type="button"
+						className="icon-btn"
+						title="Search sessions (⌘K)"
+						onClick={openSearch}
+					>
+						<Search size={16} />
+					</button>
 					<button
 						type="button"
 						className="icon-btn"
 						title="Hide sidebar (⌘\\)"
-						onClick={() => {
-							useStore.setState((state) => ({
-								settings: { ...state.settings, sidebarCollapsed: true },
-							}));
-							void api.updateSettings({ sidebarCollapsed: true });
-						}}
+						onClick={() => setSidebarCollapsed(true)}
 					>
 						<PanelLeftClose size={16} />
 					</button>
 				</div>
-				<button
-					type="button"
-					className={`sidebar-nav-btn${homeActive ? " active" : ""}`}
-					aria-current={homeActive ? "page" : undefined}
-					onClick={() => showHome()}
-				>
-					<House size={15} /> Home
-				</button>
-				<button
-					type="button"
-					className="new-session-btn"
-					onClick={() => void startNewSession(activeTab()?.cwd)}
-				>
-					<SquarePen size={15} /> New session <span className="kbd">⌘N</span>
-				</button>
-				<label className="search">
-					<Search size={14} />
-					<input
-						ref={searchRef}
-						placeholder="Search sessions"
-						value={searchQuery}
-						onChange={(e) => void runSearch(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Escape") {
-								void runSearch("");
-								e.currentTarget.blur();
-							}
-						}}
-					/>
-					<span className="kbd">⌘K</span>
-				</label>
 			</div>
 			<div className="sidebar-list">
-				{results ? (
-					results.length ? (
-						results.map((row) => (
+				{pinnedRows.length > 0 && (
+					<div className="sidebar-section">
+						<div className="sidebar-section-header">
+							<Pin size={11} /> Pinned
+						</div>
+						{pinnedRows.map((row) => (
 							<SessionRow
 								key={row.key}
 								row={row}
 								active={row.key === activeKey}
-								pinned={pinned.has(row.key)}
-							/>
-						))
-					) : (
-						<div className="sidebar-empty">No sessions match "{searchQuery}"</div>
-					)
-				) : (
-					<>
-						{pinnedRows.length > 0 && (
-							<div className="sidebar-section">
-								<div className="sidebar-section-header">
-									<Pin size={11} /> Pinned
-								</div>
-								{pinnedRows.map((row) => (
-									<SessionRow
-										key={row.key}
-										row={row}
-										active={row.key === activeKey}
-										pinned
-									/>
-								))}
-							</div>
-						)}
-						{groups.map(([cwd, list]) => (
-							<Group
-								key={cwd}
-								cwd={cwd}
-								rows={list}
-								activeKey={activeKey}
-								pinned={pinned}
-								repoKind={repoKinds.get(cwd) ?? "experiment"}
-								dragState={dragState}
-								onStartDrag={startDrag}
-								onHoverRow={hoverRow}
-								onHoverEnd={hoverEnd}
-								onDropRow={dropRow}
-								onDropEnd={dropEnd}
-								onEndDrag={() => setDragState(null)}
+								pinned
 							/>
 						))}
-						{sessionsLoaded && rows.length === 0 && (
-							<div className="sidebar-empty">
-								Your pi sessions will show up here, grouped by project.
-							</div>
-						)}
-					</>
+					</div>
+				)}
+				{groups.map(([cwd, list]) => (
+					<Group
+						key={cwd}
+						cwd={cwd}
+						rows={list}
+						activeKey={activeKey}
+						pinned={pinned}
+						repoKind={repoKinds.get(cwd) ?? "experiment"}
+						dragState={dragState}
+						onStartDrag={startDrag}
+						onHoverRow={hoverRow}
+						onHoverEnd={hoverEnd}
+						onDropRow={dropRow}
+						onDropEnd={dropEnd}
+						onEndDrag={() => setDragState(null)}
+					/>
+				))}
+				{sessionsLoaded && rows.length === 0 && (
+					<div className="sidebar-empty">
+						Your pi sessions will show up here, grouped by project.
+					</div>
 				)}
 			</div>
 			<div className="sidebar-footer">
-				<button
-					type="button"
-					className="icon-btn"
-					title="Share feedback"
-					onClick={() => useStore.setState({ feedbackOpen: true })}
-				>
-					<MessageCircle size={16} />
-				</button>
 				<button
 					type="button"
 					className="icon-btn"
@@ -769,6 +799,28 @@ export function Sidebar(_props?: { collapsed?: boolean }) {
 				</button>
 				<span className="spacer" />
 			</div>
+			<div
+				className="sidebar-resizer"
+				role="separator"
+				aria-label="Resize sidebar"
+				aria-orientation="vertical"
+				aria-valuenow={settings.sidebarWidth ?? SIDEBAR_MIN_WIDTH}
+				aria-valuemin={SIDEBAR_MIN_WIDTH}
+				aria-valuemax={SIDEBAR_MAX_WIDTH}
+				tabIndex={0}
+				onMouseDown={startResize}
+				onDoubleClick={() => resizeTo(SIDEBAR_MIN_WIDTH)}
+				onKeyDown={(event) => {
+					const step = event.shiftKey ? 32 : 8;
+					if (event.key === "ArrowLeft") {
+						event.preventDefault();
+						resizeTo((settings.sidebarWidth ?? SIDEBAR_MIN_WIDTH) - step);
+					} else if (event.key === "ArrowRight") {
+						event.preventDefault();
+						resizeTo((settings.sidebarWidth ?? SIDEBAR_MIN_WIDTH) + step);
+					}
+				}}
+			/>
 		</nav>
 	);
 }

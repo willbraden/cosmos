@@ -109,6 +109,23 @@ const typeInComposer = async (text) => {
 	await evaluate(`document.querySelector('.composer textarea').focus()`);
 	await send("Input.insertText", { text });
 };
+const typeInto = async (selector, text) => {
+	await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+	await send("Input.insertText", { text });
+};
+// Drives the sidebar resizer through a real mousedown/mousemove/mouseup gesture.
+const dragResizer = (toX) =>
+	evaluate(`(() => {
+		const handle = document.querySelector('.sidebar-resizer');
+		if (!handle) return false;
+		const box = handle.getBoundingClientRect();
+		const from = Math.round(box.left + box.width / 2);
+		const fire = (target, type, x) => target.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: 300, buttons: 1 }));
+		fire(handle, 'mousedown', from);
+		fire(window, 'mousemove', ${JSON.stringify(toX)});
+		fire(window, 'mouseup', ${JSON.stringify(toX)});
+		return true;
+	})()`);
 const clickText = (selector, text) =>
 	evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find(e => e.textContent.includes(${JSON.stringify(text)})); if (!el) return false; el.click(); return true; })()`);
 
@@ -201,7 +218,7 @@ try {
 	});
 
 	await step("sidebar lists the persisted session; settings and providers open", async () => {
-		await waitFor(`[...document.querySelectorAll('.session-row .title')].some(t => t.textContent.includes('hello there'))`, "session in sidebar");
+		await waitFor(`[...document.querySelectorAll('.session-row .title')].some(t => t.textContent.toLowerCase().includes('hello there'))`, "session in sidebar");
 		await shot("07-full-conversation");
 		await evaluate(`document.querySelector('.sidebar-footer [title^="Settings"]').click()`);
 		await clickText(".modal-nav .menu-item", "Providers");
@@ -212,10 +229,51 @@ try {
 	});
 
 	await step("new session and reopening the old one restores history", async () => {
-		await evaluate(`document.querySelector('.new-session-btn').click()`);
-		await waitFor(`document.body.innerText.includes('What should we build')`, "fresh session");
-		await clickText(".session-row", "hello there");
+		await evaluate(`document.querySelector('.sidebar-section-row [title^="New session in"]').click()`);
+		await waitFor(`document.body.innerText.includes('Ready when you are')`, "fresh session");
+		await clickText(".session-row", "Hello there");
 		await waitFor(`document.body.innerText.includes('Hello from the fake model') && document.querySelectorAll('.user-msg').length >= 4`, "history restored");
+	});
+
+	await step("search modal finds a session and opens it", async () => {
+		await evaluate(`document.querySelector('.sidebar-top-row [title^="Search sessions"]').click()`);
+		await waitFor(`!!document.querySelector('.search-modal input')`, "search modal");
+		await typeInto(".search-modal input", "hello");
+		await waitFor(`[...document.querySelectorAll('.search-hit .title')].some(t => t.textContent.toLowerCase().includes('hello there'))`, "search hit");
+		await sleep(300);
+		await shot("10-search-modal");
+		await key("Escape", "Escape", 27);
+		await waitFor(`!document.querySelector('.search-modal')`, "search modal closed");
+	});
+
+	await step("sidebar resizes by dragging its right edge", async () => {
+		const start = await evaluate(`document.querySelector('.sidebar').getBoundingClientRect().width`);
+		if (Math.round(start) !== 275) throw new Error(`expected default width 275, got ${start}`);
+		await dragResizer(420);
+		await waitFor(`Math.round(document.querySelector('.sidebar').getBoundingClientRect().width) === 420`, "sidebar widened to 420");
+		await shot("11-sidebar-wide");
+		// Past the bounds it should clamp, not keep growing/shrinking.
+		await dragResizer(900);
+		await waitFor(`Math.round(document.querySelector('.sidebar').getBoundingClientRect().width) === 600`, "sidebar clamped to max");
+		await dragResizer(40);
+		await waitFor(`Math.round(document.querySelector('.sidebar').getBoundingClientRect().width) === 275`, "sidebar clamped to min");
+		// The handle overhangs the sidebar edge, so it must stay above the main
+		// header, which paints a blurred backdrop over the first 48px.
+		const topmost = await evaluate(`(() => {
+			const r = document.querySelector('.sidebar').getBoundingClientRect();
+			return [6, 24, 44, 120].map((y) => document.elementFromPoint(r.right + 1, y)?.className ?? 'none').join('|');
+		})()`);
+		if (topmost.split("|").some((c) => !String(c).includes("sidebar-resizer")))
+			throw new Error(`resizer is occluded along its top edge: ${topmost}`);
+	});
+
+	await step("collapsed sidebar shows an icon rail", async () => {
+		await evaluate(`document.querySelector('.sidebar-top-row [title^="Hide sidebar"]').click()`);
+		await waitFor(`!!document.querySelector('.sidebar-rail')`, "collapsed rail");
+		await waitFor(`!!document.querySelector('.sidebar-rail [title^="Search sessions"]') && !!document.querySelector('.sidebar-rail-footer [title^="Settings"]')`, "rail actions");
+		await shot("12-sidebar-collapsed");
+		await evaluate(`document.querySelector('.sidebar-rail [title^="Show sidebar"]').click()`);
+		await waitFor(`!document.querySelector('.sidebar-rail')`, "sidebar expanded again");
 	});
 
 	await step("light theme", async () => {

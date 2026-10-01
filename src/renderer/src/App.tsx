@@ -1,6 +1,5 @@
 import type { MenuCommand } from "@shared/ipc";
 import { compareSessionSummaries } from "@shared/session-order";
-import { PanelLeftOpen } from "lucide-react";
 import { useEffect } from "react";
 import { ChangesPanel } from "./components/ChangesPanel";
 import { ChatView } from "./components/ChatView";
@@ -8,6 +7,7 @@ import { DeveloperInspector } from "./components/DeveloperInspector";
 import { FeedbackModal } from "./components/FeedbackModal";
 import { HomeView } from "./components/HomeView";
 import { IconButtonTooltips } from "./components/IconButtonTooltips";
+import { SearchModal } from "./components/SearchModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
@@ -64,14 +64,8 @@ function handleMenu(command: MenuCommand): void {
 			return showHome();
 		case "settings":
 			return useStore.setState({ settingsPane: "general" });
-		case "search": {
-			const { settings } = useStore.getState();
-			if (settings.sidebarCollapsed)
-				void api.updateSettings({ sidebarCollapsed: false });
-			return useStore.setState((s) => ({
-				focusSearchTick: s.focusSearchTick + 1,
-			}));
-		}
+		case "search":
+			return useStore.setState({ searchOpen: true });
 		case "toggle-sidebar":
 			return void api.updateSettings({
 				sidebarCollapsed: !useStore.getState().settings.sidebarCollapsed,
@@ -120,6 +114,7 @@ export function App() {
 	const settingsPane = useStore((s) => s.settingsPane);
 	const feedbackOpen = useStore((s) => s.feedbackOpen);
 	const changesOpen = useStore((s) => s.changesOpen);
+	const searchOpen = useStore((s) => s.searchOpen);
 
 	useEffect(() => api.onMenuCommand(handleMenu), []);
 
@@ -134,27 +129,13 @@ export function App() {
 	}, [tab?.tabId]);
 
 	return (
-		<div className={`app${collapsed ? " sidebar-collapsed" : ""}`}>
-			{!collapsed && <Sidebar collapsed={collapsed} />}
-			{collapsed && (
-				<button
-					type="button"
-					className="icon-btn no-drag sidebar-show-btn"
-					title="Show sidebar (⌘\)"
-					onClick={() => {
-						useStore.setState((state) => ({
-							settings: { ...state.settings, sidebarCollapsed: false },
-						}));
-						void api.updateSettings({ sidebarCollapsed: false });
-					}}
-				>
-					<PanelLeftOpen size={16} />
-				</button>
-			)}
+		<div className="app">
+			<Sidebar />
 			{tab ? <ChatView tab={tab} /> : <HomeView />}
 			{tab && changesOpen && <ChangesPanel tab={tab} />}
 			{settingsPane && <SettingsModal pane={settingsPane} />}
 			{feedbackOpen && <FeedbackModal />}
+			{searchOpen && <SearchModal />}
 			<DeveloperInspector />
 			<Toasts />
 			<IconButtonTooltips />

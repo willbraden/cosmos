@@ -213,11 +213,11 @@ Derived from `src/renderer/src/styles/app.css` and `src/renderer/src/App.tsx`.
 | App shell | `.app { display: flex; height: 100%; }` |
 | Main area | `.main { flex: 1; display: flex; flex-direction: column; }` |
 | Header height | `.main-header { height: 48px; }` |
-| Sidebar width | `.sidebar { width: 272px; }` |
+| Sidebar width | `.sidebar { width: 275px; }`, user-resizable `275px`–`600px` |
+| Collapsed sidebar rail width | `.sidebar-rail { width: 56px; }` |
 | Changes panel width | `.changes { width: 400px; }` |
 | Transcript content max width | `.transcript-inner { max-width: 780px; }` |
 | Composer content max width | `.composer-inner { max-width: 780px; }` |
-| Collapsed-sidebar header offset | `.sidebar-collapsed .main-header { padding-left: 84px; }` |
 
 ## Component inventory
 
@@ -303,49 +303,49 @@ Source:
 
 Real composition:
 
-- width `272px`
+- width `275px`, resizable by dragging `.sidebar-resizer` between `275px` and `600px`
 - vertical flex layout
 - background is a real gradient from `surface-raised` to a color-mixed `surface-secondary`
 - right border on the shell
+- collapses to a `56px` icon rail (`.sidebar-rail`) instead of unmounting
 
 Subparts present in code:
 
 - `.sidebar-top`
-- `.sidebar-top-row`
-- `.new-session-btn`
-- `.search`
+- `.sidebar-top-row` — Home nav button, then search and collapse icon buttons
 - `.sidebar-list`
 - `.sidebar-section`
 - `.sidebar-section-header`
-- `.sidebar-footer`
+- `.sidebar-footer` — settings only
 - `.sidebar-empty`
+- `.sidebar-resizer`
+- `.sidebar-rail`, `.sidebar-rail-top`, `.sidebar-rail-footer`
 
-### 6. New session button (`.new-session-btn`)
-
-Source: `src/renderer/src/styles/app.css`, `src/renderer/src/components/Sidebar.tsx`
-
-Real properties:
-
-- height `34px`
-- horizontal padding `10px`
-- radius `9px`
-- border `1px solid var(--color-border-neutral-normal)`
-- background `var(--color-surface-primary)`
-- font size `13px`
-- shadow `var(--shadow-rest)`
-
-### 7. Search field (`.search`)
+### 6. Sidebar resizer (`.sidebar-resizer`)
 
 Source: `src/renderer/src/styles/app.css`, `src/renderer/src/components/Sidebar.tsx`
 
 Real properties:
 
-- height `30px`
-- horizontal padding `8px`
-- radius `8px`
-- neutral secondary background by default
-- focus-within adds neutral border and normal background
-- contains an `input` with transparent background and no border
+- absolutely positioned on the sidebar's right edge, `width: 7px`, `right: -3px`
+- transparent by default; `var(--color-border-neutral-normal)` on hover, focus, and while dragging
+- `cursor: col-resize`
+- `role="separator"`; arrow keys resize by `8px` (`32px` with Shift), double-click resets to `275px`
+- `.sidebar.resizing` disables text selection during a drag
+
+### 7. Search modal (`.search-modal`)
+
+Source: `src/renderer/src/components/SearchModal.tsx`, `src/renderer/src/styles/app.css`
+
+Opened by the sidebar search button or `⌘K`. Replaces the former inline `.search` field.
+
+Real properties:
+
+- backdrop `.modal-backdrop.search-modal-backdrop` aligns to `flex-start` with `padding-top: 12vh`
+- panel `.modal.search-modal` is `min(560px, calc(100vw - 48px))` wide, height `auto`, capped at `min(460px, calc(100vh - 160px))`
+- `.search-modal-input` is a `48px` row with a search icon, transparent input, and an `esc` hint
+- `.search-modal-results` scrolls with `6px` padding
+- `.search-hit` rows are `34px` min-height, radius `8px`, with `.title` and `.meta` slots; `.search-hit.active` uses the neutral subtle hover background
 
 ### 8. Session row (`.session-row`)
 
@@ -360,8 +360,8 @@ Real row parts and states:
 | --- | --- |
 | base row | `.session-row` |
 | dragging | `.session-row.dragging` |
-| hover | `.session-row:hover` |
-| active | `.session-row.active` |
+| hover | `.session-row:hover` — `rgb(0 0 0 / 0.05)` |
+| active | `.session-row.active` — raised background plus a 1px ring, no drop shadow |
 | unread | `.session-row.unread .title` |
 | drop before | `.session-row.drop-before` |
 | drop after | `.session-row.drop-after` |
@@ -675,7 +675,7 @@ Create only the following components because they exist in code today:
 - Icon Button
 - Chip
 - KBD
-- Search Field
+- Search Modal
 - Session Row
 - Sidebar Section Header
 - Header Title
@@ -723,7 +723,7 @@ Do not add a generic card, badge, tag, tab bar, or navigation rail unless you fi
 
 Use existing interface concepts only:
 
-- left sidebar with new session button, search field, grouped session rows, footer actions
+- left sidebar with a top row (Home, search, collapse), grouped session rows, settings footer
 - header with editable title, project chip, context meter, fork button, changes button
 - transcript with at least:
   - one user bubble
@@ -760,7 +760,7 @@ For those, treat Code Connect readiness as naming and source mapping, not as a c
 - [ ] Create light and dark color variables from `src/renderer/src/styles/tokens.css`
 - [ ] Create text styles from the semantic typography token groups
 - [ ] Create spacing and radius variables from `src/renderer/src/styles/tokens.css`
-- [ ] Rebuild the left sidebar using only `Sidebar.tsx` structure and `.sidebar*`, `.search`, `.session-row` styles
+- [ ] Rebuild the left sidebar using only `Sidebar.tsx` structure and `.sidebar*`, `.session-row` styles
 - [ ] Rebuild the main header from `ChatView.tsx` and `.main-header`, `.header-title`, `.chip`, `.icon-btn`
 - [ ] Rebuild the composer from `Composer.tsx` and `.composer*`, `.send-btn`, `.queue-item`, `.attachment`
 - [ ] Rebuild the changes panel from `ChangesPanel.tsx` and `.changes*`, `.change-file*`

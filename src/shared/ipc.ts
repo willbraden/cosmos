@@ -6,6 +6,10 @@ import type { ExtensionUiRequest, PiRecord } from "./pi-types";
 export type PermissionMode = "ask" | "acceptEdits" | "auto";
 export type ThemePreference = "system" | "light" | "dark";
 
+/** Drag-to-resize bounds for the expanded sidebar, in pixels. */
+export const SIDEBAR_MIN_WIDTH = 275;
+export const SIDEBAR_MAX_WIDTH = 600;
+
 /** Identifies a model well enough to re-select it; the full record comes from pi. */
 export interface ModelRef {
 	provider: string;
@@ -40,6 +44,8 @@ export interface DesktopSettings {
 	/** Message send behaviour while pi is working. */
 	busySendMode: "steer" | "followUp";
 	sidebarCollapsed: boolean;
+	/** Sidebar width in pixels, clamped to [SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH]. */
+	sidebarWidth: number;
 	/** Enables hidden developer-only tools like UI inspect mode. */
 	developerMode: boolean;
 	/** When enabled, Cosmos can use chat context to pause likely Figma-design prompts until Figma MCP is available. */
@@ -62,6 +68,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
 	recentProjects: [],
 	busySendMode: "steer",
 	sidebarCollapsed: false,
+	sidebarWidth: SIDEBAR_MIN_WIDTH,
 	developerMode: false,
 	figmaChatContextGate: false,
 };

@@ -96,7 +96,7 @@ export interface AppStore {
 	changesOpen: boolean;
 	toasts: Toast[];
 	focusComposerTick: number;
-	focusSearchTick: number;
+	searchOpen: boolean;
 	/** Bumped when a join changes what a team layer publishes, so Home refetches. */
 	workspaceRevision: number;
 }
@@ -117,7 +117,7 @@ export const useStore = create<AppStore>(() => ({
 	changesOpen: false,
 	toasts: [],
 	focusComposerTick: 0,
-	focusSearchTick: 0,
+	searchOpen: false,
 	workspaceRevision: 0,
 }));
 
