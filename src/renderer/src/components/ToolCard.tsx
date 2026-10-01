@@ -1,7 +1,7 @@
 import type { ImageContent, TextContent, ToolResultPayload } from "@shared/pi-types";
 import {
 	Ban,
-	ChevronRight,
+	ChevronDown,
 	CircleAlert,
 	CircleCheck,
 	ExternalLink,
@@ -19,6 +19,7 @@ import { api } from "../lib/api";
 import type { Block, ToolRun } from "../state/chat-model";
 import { DiffView, diffStats } from "./DiffView";
 import { CopyButton } from "./Markdown";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 type ToolCallBlock = Extract<Block, { type: "toolCall" }>;
 
@@ -102,8 +103,10 @@ export const ToolCard = memo(function ToolCard({
 	return (
 		<div className="fold">
 			<button type="button" className="fold-header" onClick={() => setOpen(!open)} aria-expanded={open}>
-				<ChevronRight size={14} className={`chev${open ? " open" : ""}`} />
-				<Icon size={14} style={{ flexShrink: 0 }} />
+				<span className="fold-icon">
+					<Icon size={14} className="fold-icon-rest" />
+					<ChevronDown size={14} className="fold-icon-chevron" />
+				</span>
 				<span className="label">{summary.label}</span>
 				<span className="tail">
 					{stats && (
@@ -111,7 +114,7 @@ export const ToolCard = memo(function ToolCard({
 							<span className="stat-add">+{stats.added}</span> <span className="stat-del">−{stats.removed}</span>
 						</span>
 					)}
-					{status === "running" || status === "pending" ? <span className="spinner" /> : null}
+					{status === "running" || status === "pending" ? <SpinnerIcon size={14} /> : null}
 					{status === "waiting" && <span style={{ color: "var(--warning)" }}>Needs approval</span>}
 					{status === "done" && <CircleCheck size={14} className="tool-status-icon ok" />}
 					{status === "error" && <CircleAlert size={14} className="tool-status-icon err" />}

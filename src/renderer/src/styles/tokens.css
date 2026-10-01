@@ -1,0 +1,265 @@
+/* Cosmos GUI design-token foundation
+ * Aligned to the taxonomy documented in cosmos-ai/docs/design-tokens/.
+ * This file defines a small, app-consumable subset of semantic + primitive tokens
+ * so the existing renderer styles can resolve through a token layer.
+ */
+
+:root {
+	color-scheme: light;
+
+	/* Primitive scales */
+	--spacing-0: 0px;
+	--spacing-2: 2px;
+	--spacing-4: 4px;
+	--spacing-8: 8px;
+	--spacing-12: 12px;
+	--spacing-16: 16px;
+	--spacing-24: 24px;
+	--spacing-32: 32px;
+	--spacing-48: 48px;
+	--spacing-64: 64px;
+	--spacing-80: 80px;
+
+	--size-4: 4px;
+	--size-8: 8px;
+	--size-12: 12px;
+	--size-16: 16px;
+	--size-20: 20px;
+	--size-24: 24px;
+	--size-28: 28px;
+	--size-32: 32px;
+	--size-36: 36px;
+	--size-40: 40px;
+	--size-44: 44px;
+	--size-48: 48px;
+	--size-52: 52px;
+	--size-64: 64px;
+
+	--border-radius-0: 0px;
+	--border-radius-2: 2px;
+	--border-radius-4: 4px;
+	--border-radius-8: 8px;
+	--border-radius-12: 12px;
+	--border-radius-16: 16px;
+	--border-radius-9999: 9999px;
+
+	--border-width-1: 1px;
+	--border-width-2: 2px;
+
+	--opacity-0: 0%;
+	--opacity-5: 5%;
+	--opacity-10: 10%;
+	--opacity-15: 15%;
+	--opacity-20: 20%;
+	--opacity-25: 25%;
+	--opacity-30: 30%;
+	--opacity-40: 40%;
+	--opacity-50: 50%;
+	--opacity-60: 60%;
+	--opacity-70: 70%;
+	--opacity-80: 80%;
+	--opacity-90: 90%;
+	--opacity-95: 95%;
+	--opacity-100: 100%;
+
+	/* Typography */
+	--font-family-sans:
+		-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI",
+		system-ui, sans-serif;
+	--font-family-mono:
+		ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+	--typography-body-normal-default-md-font-family: var(--font-family-sans);
+	--typography-body-normal-default-md-font-size: 14px;
+	--typography-body-normal-default-md-font-weight: 400;
+	--typography-body-normal-default-md-line-height: 22px;
+	--typography-body-normal-default-md-letter-spacing: 0px;
+
+	--typography-label-normal-default-md-font-family: var(--font-family-sans);
+	--typography-label-normal-default-md-font-size: 14px;
+	--typography-label-normal-default-md-font-weight: 500;
+	--typography-label-normal-default-md-line-height: 22px;
+	--typography-label-normal-default-md-letter-spacing: 0px;
+
+	--typography-label-strong-default-md-font-family: var(--font-family-sans);
+	--typography-label-strong-default-md-font-size: 14px;
+	--typography-label-strong-default-md-font-weight: 600;
+	--typography-label-strong-default-md-line-height: 22px;
+	--typography-label-strong-default-md-letter-spacing: 0px;
+
+	--typography-label-normal-default-sm-font-family: var(--font-family-sans);
+	--typography-label-normal-default-sm-font-size: 12px;
+	--typography-label-normal-default-sm-font-weight: 500;
+	--typography-label-normal-default-sm-line-height: 18px;
+	--typography-label-normal-default-sm-letter-spacing: 0px;
+
+	--typography-label-strong-default-sm-font-family: var(--font-family-sans);
+	--typography-label-strong-default-sm-font-size: 12px;
+	--typography-label-strong-default-sm-font-weight: 600;
+	--typography-label-strong-default-sm-line-height: 18px;
+	--typography-label-strong-default-sm-letter-spacing: 0px;
+
+	/* Semantic colors */
+	--color-surface-default: #f3f5fb;
+	--color-surface-primary: #ffffff;
+	--color-surface-secondary: #eef2fb;
+	--color-surface-raised: #e8edf9;
+
+	--color-background-neutral-default-normal-idle: #ffffff;
+	--color-background-neutral-default-normal-hover: #f5f7fd;
+	--color-background-neutral-default-subtle-idle: #eef2fb;
+	--color-background-neutral-default-subtle-hover: #e6ecf8;
+	--color-background-neutral-default-minimal-idle: #f6f8fd;
+	--color-background-neutral-default-strong-idle: #20263a;
+	--color-background-neutral-default-strong-hover: #2c334a;
+
+	--color-background-brand-default-strong-idle: #2b2f36;
+	--color-background-brand-default-strong-hover: #1f2329;
+	--color-background-brand-default-subtle-idle: #eef0f3;
+
+	--color-background-negative-default-normal-idle: #d84e39;
+	--color-background-negative-default-subtle-idle: #fdecea;
+	--color-background-warning-default-normal-idle: #b97816;
+	--color-background-warning-default-subtle-idle: #fff0d8;
+	--color-background-positive-default-normal-idle: #2f7f5f;
+	--color-background-positive-default-subtle-idle: #e5f6ee;
+
+	--color-foreground-neutral-default-strong: #1b2234;
+	--color-foreground-neutral-default-normal: #5b6478;
+	--color-foreground-neutral-default-subtle: #8690a6;
+	--color-foreground-neutral-inverse-strong: #ffffff;
+	--color-foreground-brand-strong: #2b2f36;
+
+	--color-foreground-negative-default-strong: #d84e39;
+	--color-foreground-warning-strong: #b97816;
+	--color-foreground-positive-strong: #2f7f5f;
+
+	--color-border-neutral-subtle: #d9e0ef;
+	--color-border-neutral-normal: #c5cede;
+	--color-border-neutral-strong: #8e949f;
+	--color-border-brand-strong: #8e949f;
+	--color-border-negative-default: #d84e39;
+
+	/* Shadows resolve to zero in dark mode per the token spec. */
+	--shadow-rest: 0 2px 2px -2px rgb(0 0 0 / 40%), 0 0 1px 0 rgb(0 0 0 / 30%);
+	--shadow-lift: 0 6px 6px -4px rgb(0 0 0 / 20%), 0 0 4px 0 rgb(0 0 0 / 10%);
+	--shadow-float: 0 12px 12px -4px rgb(0 0 0 / 10%), 0 0 16px 0 rgb(0 0 0 / 10%);
+	--shadow-md: var(--shadow-lift);
+
+	/* Contextual helper for strong action surfaces. */
+	--app-foreground-on-brand-strong: var(--color-foreground-neutral-inverse-strong);
+	--accent: #8f98a8;
+	--warning: var(--color-foreground-warning-strong);
+	--danger: var(--color-foreground-negative-default-strong);
+	--success: var(--color-foreground-positive-strong);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		color-scheme: dark;
+
+		--color-surface-default: #0d1120;
+		--color-surface-primary: #151a2f;
+		--color-surface-secondary: #1a2138;
+		--color-surface-raised: #0f162b;
+
+		--color-background-neutral-default-normal-idle: #171e35;
+		--color-background-neutral-default-normal-hover: #1d2540;
+		--color-background-neutral-default-subtle-idle: #1a223b;
+		--color-background-neutral-default-subtle-hover: #232d4a;
+		--color-background-neutral-default-minimal-idle: #10162a;
+		--color-background-neutral-default-strong-idle: #f3f5ff;
+		--color-background-neutral-default-strong-hover: #e3e7f8;
+
+		--color-background-brand-default-strong-idle: #e6e9ef;
+		--color-background-brand-default-strong-hover: #f1f3f7;
+		--color-background-brand-default-subtle-idle: #232830;
+
+		--color-background-negative-default-normal-idle: #ff8a76;
+		--color-background-negative-default-subtle-idle: #412520;
+		--color-background-warning-default-normal-idle: #f2bd63;
+		--color-background-warning-default-subtle-idle: #41331d;
+		--color-background-positive-default-normal-idle: #7ad0a1;
+		--color-background-positive-default-subtle-idle: #1d3528;
+
+		--color-foreground-neutral-default-strong: #f3f5ff;
+		--color-foreground-neutral-default-normal: #b6bfd4;
+		--color-foreground-neutral-default-subtle: #7f8aa5;
+		--color-foreground-neutral-inverse-strong: #111528;
+		--color-foreground-brand-strong: #d7dbe3;
+
+		--color-foreground-negative-default-strong: #ff8a76;
+		--color-foreground-warning-strong: #f2bd63;
+		--color-foreground-positive-strong: #7ad0a1;
+
+		--color-border-neutral-subtle: #2a3452;
+		--color-border-neutral-normal: #394566;
+		--color-border-neutral-strong: #677080;
+		--color-border-brand-strong: #677080;
+		--color-border-negative-default: #ff8a76;
+
+		--shadow-rest: 0 0 0 0 rgb(255 255 255 / 0%);
+		--shadow-lift: 0 0 0 0 rgb(255 255 255 / 0%);
+		--shadow-float: 0 0 0 0 rgb(255 255 255 / 0%);
+
+		--app-foreground-on-brand-strong: var(--color-foreground-neutral-inverse-strong);
+		--accent: #c0c6d1;
+		--warning: var(--color-foreground-warning-strong);
+		--danger: var(--color-foreground-negative-default-strong);
+		--success: var(--color-foreground-positive-strong);
+	}
+}
+
+:root[data-theme="dark"] {
+	color-scheme: dark;
+
+	--color-surface-default: #0d1120;
+	--color-surface-primary: #151a2f;
+	--color-surface-secondary: #1a2138;
+	--color-surface-raised: #0f162b;
+
+	--color-background-neutral-default-normal-idle: #171e35;
+	--color-background-neutral-default-normal-hover: #1d2540;
+	--color-background-neutral-default-subtle-idle: #1a223b;
+	--color-background-neutral-default-subtle-hover: #232d4a;
+	--color-background-neutral-default-minimal-idle: #10162a;
+	--color-background-neutral-default-strong-idle: #f3f5ff;
+	--color-background-neutral-default-strong-hover: #e3e7f8;
+
+	--color-background-brand-default-strong-idle: #e6e9ef;
+	--color-background-brand-default-strong-hover: #f1f3f7;
+	--color-background-brand-default-subtle-idle: #232830;
+
+	--color-background-negative-default-normal-idle: #ff8a76;
+	--color-background-negative-default-subtle-idle: #412520;
+	--color-background-warning-default-normal-idle: #f2bd63;
+	--color-background-warning-default-subtle-idle: #41331d;
+	--color-background-positive-default-normal-idle: #7ad0a1;
+	--color-background-positive-default-subtle-idle: #1d3528;
+
+	--color-foreground-neutral-default-strong: #f3f5ff;
+	--color-foreground-neutral-default-normal: #b6bfd4;
+	--color-foreground-neutral-default-subtle: #7f8aa5;
+	--color-foreground-neutral-inverse-strong: #111528;
+	--color-foreground-brand-strong: #d7dbe3;
+
+	--color-foreground-negative-default-strong: #ff8a76;
+	--color-foreground-warning-strong: #f2bd63;
+	--color-foreground-positive-strong: #7ad0a1;
+
+	--color-border-neutral-subtle: #2a3452;
+	--color-border-neutral-normal: #394566;
+	--color-border-neutral-strong: #677080;
+	--color-border-brand-strong: #677080;
+	--color-border-negative-default: #ff8a76;
+
+	--shadow-rest: 0 0 0 0 rgb(255 255 255 / 0%);
+	--shadow-lift: 0 0 0 0 rgb(255 255 255 / 0%);
+	--shadow-float: 0 0 0 0 rgb(255 255 255 / 0%);
+
+	--app-foreground-on-brand-strong: var(--color-foreground-neutral-inverse-strong);
+	--accent: #c0c6d1;
+	--warning: var(--color-foreground-warning-strong);
+	--danger: var(--color-foreground-negative-default-strong);
+	--success: var(--color-foreground-positive-strong);
+}

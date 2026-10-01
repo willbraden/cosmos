@@ -4,6 +4,7 @@ import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { api } from "./lib/api";
 import { bootstrap } from "./state/actions";
+import "./styles/tokens.css";
 import "./styles/app.css";
 
 window.addEventListener("error", (event) => api.log("error", `${event.message}\n${event.error?.stack ?? ""}`));

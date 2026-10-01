@@ -1,50 +1,227 @@
-import { ArrowDown, Brain, ChevronRight, CircleAlert, History, Info, Pencil, SquareTerminal, TriangleAlert } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { formatCost, formatTokens } from "../lib/api";
-import { forkFromMessage, parsePermissionPrompt } from "../state/actions";
-import type { ChatItem, ChatState } from "../state/chat-model";
+import {
+	ArrowDown,
+	Brain,
+	ChevronDown,
+	CircleAlert,
+	History,
+	Info,
+	Pencil,
+	SquareTerminal,
+	TriangleAlert,
+} from "lucide-react";
+import {
+	memo,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import { splitThoughts, summarizeBusyWork } from "../lib/activity";
+import { formatTokens } from "../lib/api";
+import { editMessage, parsePermissionPrompt } from "../state/actions";
+import { isHiddenUserPromptText, type Block, type ChatItem, type ChatState } from "../state/chat-model";
 import type { TabState } from "../state/store";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { CopyButton, Markdown } from "./Markdown";
+import { SpinnerIcon } from "./SpinnerIcon";
 import { ToolCard } from "./ToolCard";
 
-function Thinking({ text, redacted, live }: { text: string; redacted?: boolean; live: boolean }) {
+function ThinkingFold({
+	title,
+	body,
+	redacted,
+	live,
+}: {
+	title: string | null;
+	body: string;
+	redacted: boolean;
+	live: boolean;
+}) {
 	const [open, setOpen] = useState(false);
-	const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+	const { mounted, expanded } = useCollapseAnimation(open);
+	const label = title ?? (redacted ? "Thinking (redacted)" : "Thinking");
 	return (
-		<div className="fold">
-			<button type="button" className="fold-header" onClick={() => setOpen(!open)} aria-expanded={open}>
-				<ChevronRight size={14} className={`chev${open ? " open" : ""}`} />
-				<Brain size={14} />
-				<span className="label">{live ? "Thinking…" : redacted ? "Thinking (redacted)" : "Thought process"}</span>
-				{!live && words > 0 && <span className="tail">{words} words</span>}
+		<div className="fold thinking-fold">
+			<button
+				type="button"
+				className={`fold-header thinking-header${live ? " is-live shimmer" : ""}`}
+				onClick={() => setOpen(!open)}
+				aria-expanded={open}
+			>
+				<span className="fold-icon">
+					{live ? (
+						<SpinnerIcon size={14} className="fold-icon-rest" />
+					) : (
+						<Brain size={14} className="fold-icon-rest" />
+					)}
+					<ChevronDown size={14} className="fold-icon-chevron" />
+				</span>
+				<span className="label">{label}</span>
 			</button>
-			{open && text && <div className="thinking-body">{text}</div>}
+			{mounted && (
+				<div className={`thinking-reveal${expanded ? " expanded" : ""}`}>
+					<div className="thinking-reveal-inner">
+						<div className="thinking-content">
+							{body ? (
+								<div className="thinking-body">{body}</div>
+							) : (
+								<div className="thinking-body muted">
+									This reasoning was redacted.
+								</div>
+							)}
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }
 
-const UserMessage = memo(function UserMessage({ item, tabId, canFork }: { item: Extract<ChatItem, { kind: "user" }>; tabId: string; canFork: boolean }) {
+type ReasoningBlock = Exclude<Block, { type: "text" }>;
+type AssistantTranscriptItem = Extract<ChatItem, { kind: "assistant" }>;
+type NonAssistantItem = Exclude<ChatItem, { kind: "assistant" }>;
+type TranscriptRow =
+	| { key: string; kind: "assistantTurn"; items: AssistantTranscriptItem[] }
+	| { key: string; kind: "item"; item: NonAssistantItem };
+
+function hasActiveReasoningWork(
+	blocks: ReasoningBlock[],
+	tools: ChatState["tools"],
+	waitingToolIds: Set<string>,
+	settled: boolean,
+): boolean {
+	const waiting = blocks.some(
+		(block) => block.type === "toolCall" && waitingToolIds.has(block.id),
+	);
+	const running = blocks.some(
+		(block) =>
+			block.type === "toolCall" &&
+			!waitingToolIds.has(block.id) &&
+			!settled &&
+			(!tools[block.id] || tools[block.id]?.status === "running"),
+	);
+	return waiting || running;
+}
+
+const UserMessage = memo(function UserMessage({
+	item,
+	tabId,
+	canEdit,
+}: {
+	item: Extract<ChatItem, { kind: "user" }>;
+	tabId: string;
+	canEdit: boolean;
+}) {
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState(item.text);
+	const textarea = useRef<HTMLTextAreaElement>(null);
+
+	// Leave edit mode if the message is replaced underneath us (e.g. a reload).
+	useEffect(() => {
+		setEditing(false);
+	}, [item.entryId]);
+
+	useLayoutEffect(() => {
+		const el = textarea.current;
+		if (!editing || !el) return;
+		el.style.height = "auto";
+		el.style.height = `${el.scrollHeight}px`;
+	}, [editing, draft]);
+
+	const startEditing = useCallback(() => {
+		setDraft(item.text);
+		setEditing(true);
+		// Focus after the textarea mounts, with the caret at the end.
+		requestAnimationFrame(() => {
+			const el = textarea.current;
+			if (!el) return;
+			el.focus();
+			el.setSelectionRange(el.value.length, el.value.length);
+		});
+	}, [item.text]);
+
+	const cancel = useCallback(() => {
+		setEditing(false);
+		setDraft(item.text);
+	}, [item.text]);
+
+	const save = useCallback(() => {
+		const entryId = item.entryId;
+		if (!entryId) return;
+		const trimmed = draft.trim();
+		if (!trimmed || trimmed === item.text.trim()) {
+			cancel();
+			return;
+		}
+		setEditing(false);
+		void editMessage(tabId, entryId, trimmed, item.images);
+	}, [cancel, draft, item.entryId, item.images, item.text, tabId]);
+
+	if (editing) {
+		return (
+			<div className="user-msg editing">
+				<textarea
+					ref={textarea}
+					className="user-edit"
+					value={draft}
+					aria-label="Edit message"
+					onChange={(event) => setDraft(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Escape") {
+							event.preventDefault();
+							cancel();
+						} else if (event.key === "Enter" && !event.shiftKey) {
+							event.preventDefault();
+							save();
+						}
+					}}
+				/>
+				<div className="user-edit-actions">
+					<span className="muted small-text">
+						Replaces everything after this message
+					</span>
+					<button type="button" className="btn" onClick={cancel}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						className="btn primary"
+						onClick={save}
+						disabled={!draft.trim()}
+					>
+						Send
+					</button>
+				</div>
+			</div>
+		);
+	}
+
 	return (
 		<div className="user-msg">
 			{item.images.length > 0 && (
 				<div className="user-images">
 					{item.images.map((image, index) => (
 						// biome-ignore lint/suspicious/noArrayIndexKey: static list
-						<img key={index} alt="Attached" src={`data:${image.mimeType};base64,${image.data}`} />
+						<img
+							key={index}
+							alt="Attached"
+							src={`data:${image.mimeType};base64,${image.data}`}
+						/>
 					))}
 				</div>
 			)}
 			{item.text && <div className="user-bubble">{item.text}</div>}
 			<div className="msg-actions">
 				<CopyButton text={item.text} label="Copy message" />
-				{canFork && item.entryId && (
+				{canEdit && item.entryId && (
 					<button
 						type="button"
 						className="icon-btn"
-						title="Edit — branch a new session from this message"
+						title="Edit — resend from this message"
 						aria-label="Edit message"
-						onClick={() => void forkFromMessage(tabId, item.entryId as string)}
+						onClick={startEditing}
 					>
 						<Pencil size={14} />
 					</button>
@@ -54,71 +231,213 @@ const UserMessage = memo(function UserMessage({ item, tabId, canFork }: { item: 
 	);
 });
 
-const AssistantMessage = memo(function AssistantMessage({
-	item,
+function formatThoughtDuration(durationMs: number | undefined): string | null {
+	if (!durationMs || durationMs <= 0) return null;
+	const seconds = Math.max(1, Math.round(durationMs / 1000));
+	if (seconds < 60) return `Thought for ${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainder = seconds % 60;
+	return remainder > 0
+		? `Thought for ${minutes}m ${remainder}s`
+		: `Thought for ${minutes}m`;
+}
+
+function assistantText(item: AssistantTranscriptItem): string {
+	return item.blocks
+		.filter((block) => block.type === "text")
+		.map((block) => block.text)
+		.join("\n\n")
+		.trim();
+}
+
+function assistantDetailBlocks(item: AssistantTranscriptItem): ReasoningBlock[] {
+	return item.blocks.filter(
+		(block): block is ReasoningBlock => block.type !== "text",
+	);
+}
+
+const COLLAPSE_MS = 300;
+
+/**
+ * Drives the expand/collapse transition. Contents stay mounted for the length of
+ * the collapse so they can animate out, then unmount to keep long transcripts light.
+ */
+function useCollapseAnimation(open: boolean) {
+	const [mounted, setMounted] = useState(open);
+	const [expanded, setExpanded] = useState(open);
+
+	useEffect(() => {
+		if (open) {
+			setMounted(true);
+			return;
+		}
+		setExpanded(false);
+		const timer = setTimeout(() => setMounted(false), COLLAPSE_MS);
+		return () => clearTimeout(timer);
+	}, [open]);
+
+	// Grow only once the contents are in the DOM, so the transition has a
+	// collapsed frame to animate away from.
+	useEffect(() => {
+		if (!open || !mounted) return;
+		const frame = requestAnimationFrame(() => setExpanded(true));
+		return () => cancelAnimationFrame(frame);
+	}, [open, mounted]);
+
+	return { mounted, expanded };
+}
+
+type ToolCallBlock = Extract<Block, { type: "toolCall" }>;
+
+type TurnNode =
+	| { key: string; kind: "text"; text: string }
+	| {
+			key: string;
+			kind: "thought";
+			title: string | null;
+			body: string;
+			redacted: boolean;
+			live: boolean;
+	  }
+	| { key: string; kind: "tool"; block: ToolCallBlock; settled: boolean };
+
+/**
+ * Flattens a turn into one chronological list. Reasoning collapses per section
+ * while tool calls and prose stay at the top level rather than behind one fold.
+ */
+function flattenTurn(
+	items: AssistantTranscriptItem[],
+	turnActive: boolean,
+): TurnNode[] {
+	const nodes: TurnNode[] = [];
+	for (const item of items) {
+		let pending: string[] = [];
+		let pendingKey = "";
+		const flushText = () => {
+			const text = pending.join("\n\n").trim();
+			pending = [];
+			if (text) nodes.push({ key: pendingKey, kind: "text", text });
+		};
+		item.blocks.forEach((block, index) => {
+			if (block.type === "text") {
+				if (pending.length === 0) pendingKey = `${item.key}:text:${index}`;
+				pending.push(block.text);
+				return;
+			}
+			flushText();
+			if (block.type === "thinking") {
+				// Only a trailing reasoning block is still being written to.
+				const streaming =
+					turnActive && item.streaming && index === item.blocks.length - 1;
+				const sections = splitThoughts(block.text);
+				if (sections.length === 0) {
+					if (!block.redacted) return;
+					nodes.push({
+						key: `${item.key}:thought:${index}`,
+						kind: "thought",
+						title: null,
+						body: "",
+						redacted: true,
+						live: false,
+					});
+					return;
+				}
+				sections.forEach((section, part) => {
+					nodes.push({
+						key: `${item.key}:thought:${index}:${part}`,
+						kind: "thought",
+						title: section.title,
+						body: section.body,
+						redacted: !!block.redacted,
+						live: streaming && part === sections.length - 1,
+					});
+				});
+				return;
+			}
+			nodes.push({
+				key: `${item.key}:tool:${block.id || index}`,
+				kind: "tool",
+				block,
+				settled: !item.streaming,
+			});
+		});
+		flushText();
+	}
+	return nodes;
+}
+
+const AssistantTurn = memo(function AssistantTurn({
+	items,
 	tools,
 	cwd,
 	waitingToolIds,
+	showFooter,
+	turnActive,
 }: {
-	item: Extract<ChatItem, { kind: "assistant" }>;
+	items: AssistantTranscriptItem[];
 	tools: ChatState["tools"];
 	cwd: string;
 	waitingToolIds: Set<string>;
+	showFooter: boolean;
+	turnActive: boolean;
 }) {
-	const text = item.blocks
-		.filter((b) => b.type === "text")
-		.map((b) => (b as { text: string }).text)
-		.join("\n\n")
-		.trim();
-	const failed = item.stopReason === "error" || (item.stopReason === "aborted" && item.errorMessage);
-	const lastIndex = item.blocks.length - 1;
+	const finalItem = items[items.length - 1];
+	const text = assistantText(finalItem);
+	const failed =
+		finalItem.stopReason === "error" ||
+		(finalItem.stopReason === "aborted" && finalItem.errorMessage);
+	const durationLabel = formatThoughtDuration(finalItem.durationMs);
+	const nodes = useMemo(
+		() => flattenTurn(items, turnActive),
+		[items, turnActive],
+	);
+
 	return (
 		<div className="assistant-msg">
-			{item.blocks.map((block, index) => {
-				if (block.type === "thinking") {
+			{nodes.map((node) => {
+				if (node.kind === "text")
+					return <Markdown key={node.key} text={node.text} />;
+				if (node.kind === "thought")
 					return (
-						// biome-ignore lint/suspicious/noArrayIndexKey: blocks are positional (contentIndex)
-						<Thinking key={index} text={block.text} redacted={block.redacted} live={item.streaming && index === lastIndex} />
+						<ThinkingFold
+							key={node.key}
+							title={node.title}
+							body={node.body}
+							redacted={node.redacted}
+							live={node.live}
+						/>
 					);
-				}
-				if (block.type === "text") {
-					if (!block.text.trim()) return null;
-					// biome-ignore lint/suspicious/noArrayIndexKey: blocks are positional (contentIndex)
-					return <Markdown key={index} text={block.text} />;
-				}
 				return (
 					<ToolCard
-						key={block.id || index}
-						block={block}
-						run={tools[block.id]}
+						key={node.key}
+						block={node.block}
+						run={tools[node.block.id]}
 						cwd={cwd}
-						settled={!item.streaming}
-						awaitingPermission={waitingToolIds.has(block.id)}
+						settled={node.settled}
+						awaitingPermission={waitingToolIds.has(node.block.id)}
 					/>
 				);
 			})}
 			{failed && (
 				<div className="error-card">
-					<strong>{item.stopReason === "aborted" ? "Stopped" : "Error"}:</strong> {item.errorMessage ?? "The request failed."}
+					<strong>
+						{finalItem.stopReason === "aborted" ? "Stopped" : "Error"}:
+					</strong>{" "}
+					{finalItem.errorMessage ?? "The request failed."}
 				</div>
 			)}
-			{item.stopReason === "aborted" && !item.errorMessage && <div className="muted small-text">Stopped</div>}
-			{/* Only the message that ends a turn gets a footer; tool-call steps stay compact. */}
-			{!item.streaming && item.stopReason !== "toolUse" && (text || item.usage) && (
-				<div className="assistant-footer">
-					{text && (
-						<div className="msg-actions">
-							<CopyButton text={text} label="Copy response" />
-						</div>
-					)}
-					{item.usage && item.usage.totalTokens > 0 && (
-						<span title={`${item.provider}/${item.model}`}>
-							{item.model} · {formatTokens(item.usage.totalTokens)} tokens
-							{item.usage.cost.total > 0 ? ` · ${formatCost(item.usage.cost.total)}` : ""}
-						</span>
-					)}
-				</div>
+			{finalItem.stopReason === "aborted" && !finalItem.errorMessage && (
+				<div className="muted small-text">Stopped</div>
 			)}
+			{showFooter &&
+				!finalItem.streaming &&
+				finalItem.stopReason !== "toolUse" &&
+				(text || durationLabel) && (
+					<div className="assistant-footer">
+						{durationLabel && <span>{durationLabel}</span>}
+						{text && <CopyButton text={text} label="Copy latest response" />}
+					</div>
+				)}
 		</div>
 	);
 });
@@ -127,20 +446,35 @@ function BashItem({ item }: { item: Extract<ChatItem, { kind: "bash" }> }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<div className="fold">
-			<button type="button" className="fold-header" onClick={() => setOpen(!open)}>
-				<ChevronRight size={14} className={`chev${open ? " open" : ""}`} />
-				<SquareTerminal size={14} />
+			<button
+				type="button"
+				className="fold-header"
+				onClick={() => setOpen(!open)}
+				aria-expanded={open}
+			>
+				<span className="fold-icon">
+					<SquareTerminal size={14} className="fold-icon-rest" />
+					<ChevronDown size={14} className="fold-icon-chevron" />
+				</span>
 				<span className="label">
 					<code>$ {item.command}</code>
 				</span>
 				<span className="tail">
 					{item.excludeFromContext && <span>not sent to model</span>}
-					{item.running ? <span className="spinner" /> : item.cancelled ? "cancelled" : `exit ${item.exitCode ?? "?"}`}
+					{item.running ? (
+						<span className="spinner" />
+					) : item.cancelled ? (
+						"cancelled"
+					) : (
+						`exit ${item.exitCode ?? "?"}`
+					)}
 				</span>
 			</button>
 			{open && (
 				<div className="tool-body">
-					<pre className={`tool-pre${item.exitCode ? " error" : ""}`}>{item.output || (item.running ? "…" : "(no output)")}</pre>
+					<pre className={`tool-pre${item.exitCode ? " error" : ""}`}>
+						{item.output || (item.running ? "…" : "(no output)")}
+					</pre>
 				</div>
 			)}
 		</div>
@@ -148,7 +482,12 @@ function BashItem({ item }: { item: Extract<ChatItem, { kind: "bash" }> }) {
 }
 
 function Notice({ item }: { item: Extract<ChatItem, { kind: "notice" }> }) {
-	const Icon = item.level === "error" ? CircleAlert : item.level === "warning" ? TriangleAlert : Info;
+	const Icon =
+		item.level === "error"
+			? CircleAlert
+			: item.level === "warning"
+				? TriangleAlert
+				: Info;
 	return (
 		<div className={`notice ${item.level}`}>
 			<Icon size={15} style={{ flexShrink: 0, marginTop: 2 }} />
@@ -168,12 +507,12 @@ function SummaryCard({ title, summary }: { title: string; summary: string }) {
 	);
 }
 
-function renderItem(item: ChatItem, tab: TabState, waiting: Set<string>) {
+function renderStandaloneItem(item: NonAssistantItem, tab: TabState) {
 	switch (item.kind) {
 		case "user":
-			return <UserMessage item={item} tabId={tab.tabId} canFork={!tab.isStreaming} />;
-		case "assistant":
-			return <AssistantMessage item={item} tools={tab.chat.tools} cwd={tab.cwd} waitingToolIds={waiting} />;
+			return (
+				<UserMessage item={item} tabId={tab.tabId} canEdit={!tab.isStreaming} />
+			);
 		case "bash":
 			return <BashItem item={item} />;
 		case "notice":
@@ -186,7 +525,12 @@ function renderItem(item: ChatItem, tab: TabState, waiting: Set<string>) {
 				/>
 			);
 		case "branchSummary":
-			return <SummaryCard title="Summary of the branch you left" summary={item.summary} />;
+			return (
+				<SummaryCard
+					title="Summary of the branch you left"
+					summary={item.summary}
+				/>
+			);
 		case "custom":
 			return (
 				<div className="notice info">
@@ -200,46 +544,133 @@ function renderItem(item: ChatItem, tab: TabState, waiting: Set<string>) {
 	}
 }
 
-function WorkingIndicator({ tab }: { tab: TabState }) {
+function groupTranscriptRows(items: ChatItem[]): TranscriptRow[] {
+	const rows: TranscriptRow[] = [];
+	let bufferedAssistants: AssistantTranscriptItem[] = [];
+	const flushAssistants = () => {
+		if (bufferedAssistants.length === 0) return;
+		rows.push({
+			key: bufferedAssistants[0].key,
+			kind: "assistantTurn",
+			items: bufferedAssistants,
+		});
+		bufferedAssistants = [];
+	};
+	for (const item of items) {
+		if (item.kind === "assistant") {
+			bufferedAssistants.push(item);
+			continue;
+		}
+		flushAssistants();
+		if (item.kind === "user" && isHiddenUserPromptText(item.text)) continue;
+		rows.push({ key: item.key, kind: "item", item });
+	}
+	flushAssistants();
+	return rows;
+}
+
+function renderRow(
+	row: TranscriptRow,
+	tab: TabState,
+	waiting: Set<string>,
+	latestAssistantTurnKey?: string,
+) {
+	if (row.kind === "assistantTurn") {
+		return (
+			<AssistantTurn
+				items={row.items}
+				tools={tab.chat.tools}
+				cwd={tab.cwd}
+				waitingToolIds={waiting}
+				showFooter={row.key === latestAssistantTurnKey}
+				turnActive={row.key === latestAssistantTurnKey && tab.isStreaming}
+			/>
+		);
+	}
+	return renderStandaloneItem(row.item, tab);
+}
+
+function hasInlineActiveIndicator(
+	rows: TranscriptRow[],
+	tab: TabState,
+	waitingToolIds: Set<string>,
+): boolean {
+	for (let index = rows.length - 1; index >= 0; index--) {
+		const row = rows[index];
+		if (row.kind === "assistantTurn") {
+			const latestDetailItem = [...row.items]
+				.reverse()
+				.find((item) => assistantDetailBlocks(item).length > 0);
+			if (!latestDetailItem?.streaming) return false;
+			return hasActiveReasoningWork(
+				assistantDetailBlocks(latestDetailItem),
+				tab.chat.tools,
+				waitingToolIds,
+				false,
+			);
+		}
+		if (row.item.kind === "bash") return row.item.running;
+	}
+	return false;
+}
+
+function WorkingIndicator({
+	tab,
+	waitingToolIds,
+}: {
+	tab: TabState;
+	waitingToolIds: Set<string>;
+}) {
 	const [, force] = useState(0);
 	useEffect(() => {
 		const timer = setInterval(() => force((n) => n + 1), 1000);
 		return () => clearInterval(timer);
 	}, []);
-	const seconds = tab.runStartedAt ? Math.floor((Date.now() - tab.runStartedAt) / 1000) : 0;
-	let label = "Working";
+	const seconds = tab.runStartedAt
+		? Math.floor((Date.now() - tab.runStartedAt) / 1000)
+		: 0;
+	let label =
+		summarizeBusyWork(tab.chat.items, tab.chat.tools, waitingToolIds) ??
+		"Working";
 	if (tab.isCompacting) label = "Compacting context";
 	else if (tab.retry) {
-		const wait = Math.max(0, Math.ceil((tab.retry.at + tab.retry.delayMs - Date.now()) / 1000));
+		const wait = Math.max(
+			0,
+			Math.ceil((tab.retry.at + tab.retry.delayMs - Date.now()) / 1000),
+		);
 		label = `${tab.retry.message} — retrying (${tab.retry.attempt}/${tab.retry.maxAttempts})${wait ? ` in ${wait}s` : ""}`;
-	} else if (tab.dialogs.length) label = "Waiting for you";
+	}
 	return (
 		<div className="working">
-			<span className="dots">
-				<span />
-				<span />
-				<span />
-			</span>
+			<SpinnerIcon size={14} />
 			{label}
 			{seconds > 2 && !tab.retry ? ` · ${seconds}s` : ""}
 		</div>
 	);
 }
 
-export function Transcript({ tab, onScrolled }: { tab: TabState; onScrolled(scrolled: boolean): void }) {
+export function Transcript({
+	tab,
+	onScrolled,
+}: {
+	tab: TabState;
+	onScrolled(scrolled: boolean): void;
+}) {
 	const scroller = useRef<HTMLDivElement>(null);
 	const pinned = useRef(true);
 	const [showJump, setShowJump] = useState(false);
 
 	const waiting = new Set<string>();
 	for (const dialog of tab.dialogs) {
-		const payload = "title" in dialog ? parsePermissionPrompt(dialog.title) : null;
+		const payload =
+			"title" in dialog ? parsePermissionPrompt(dialog.title) : null;
 		if (payload) waiting.add(payload.toolCallId);
 	}
 
 	const scrollToBottom = useCallback((smooth = false) => {
 		const el = scroller.current;
-		if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+		if (el)
+			el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
 	}, []);
 
 	// Stick to the bottom while content streams in, unless the user scrolled up to read.
@@ -262,17 +693,24 @@ export function Transcript({ tab, onScrolled }: { tab: TabState; onScrolled(scro
 		onScrolled(el.scrollTop > 4);
 	};
 
+	const rows = useMemo(() => groupTranscriptRows(tab.chat.items), [tab.chat.items]);
 	const busy = tab.isStreaming || tab.isCompacting;
+	const showBottomWorkingIndicator = !hasInlineActiveIndicator(rows, tab, waiting);
+	const latestAssistantTurnKey = [...rows]
+		.reverse()
+		.find((row): row is Extract<TranscriptRow, { kind: "assistantTurn" }> => row.kind === "assistantTurn")?.key;
 	return (
 		<>
 			<div className="transcript" ref={scroller} onScroll={onScroll}>
 				<div className="transcript-inner">
-					{tab.chat.items.map((item) => (
-						<ErrorBoundary key={item.key} inline>
-							{renderItem(item, tab, waiting)}
+					{rows.map((row) => (
+						<ErrorBoundary key={row.key} inline>
+							{renderRow(row, tab, waiting, latestAssistantTurnKey)}
 						</ErrorBoundary>
 					))}
-					{busy && <WorkingIndicator tab={tab} />}
+					{busy && showBottomWorkingIndicator && (
+						<WorkingIndicator tab={tab} waitingToolIds={waiting} />
+					)}
 				</div>
 			</div>
 			{showJump && (

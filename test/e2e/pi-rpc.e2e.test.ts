@@ -4,7 +4,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // @ts-expect-error untyped test helper
@@ -17,6 +17,16 @@ import { PERMISSION_OPTIONS, PERMISSION_PROMPT_MARKER, type PiRecord } from "../
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
 const electronPath = require("electron") as unknown as string;
+const childPath = process.platform !== "darwin"
+	? electronPath
+	: join(
+		dirname(dirname(electronPath)),
+		"Frameworks",
+		`${basename(electronPath)} Helper.app`,
+		"Contents",
+		"MacOS",
+		`${basename(electronPath)} Helper`,
+	);
 const piCli = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "bundle", "cli.js");
 
 let server: { port: number; requests: unknown[]; close(): Promise<void> };
@@ -25,7 +35,7 @@ let agentDir: string;
 
 function launch(permissionMode: string, extraArgs: string[] = []): PiProcess {
 	const proc = new PiProcess({
-		command: electronPath,
+		command: childPath,
 		args: [
 			join(root, "resources/pi-launcher.mjs"),
 			piCli,
@@ -157,7 +167,12 @@ describe("pi RPC through the desktop launcher", () => {
 		const deniedEvents = collect(denied);
 		try {
 			await denied.request({ type: "prompt", message: "run bash please" });
-			const request = (await deniedEvents.next((r) => r.type === "extension_ui_request" && "title" in r)) as { id: string };
+			const request = (await deniedEvents.next(
+				(r) =>
+					r.type === "extension_ui_request" &&
+					"title" in r &&
+					r.title.startsWith(PERMISSION_PROMPT_MARKER),
+			)) as { id: string };
 			denied.send({ type: "extension_ui_response", id: request.id, value: PERMISSION_OPTIONS.deny });
 			const end = (await deniedEvents.next((r) => r.type === "tool_execution_end")) as Extract<PiRecord, { type: "tool_execution_end" }>;
 			expect(end.isError).toBe(true);
@@ -173,7 +188,14 @@ describe("pi RPC through the desktop launcher", () => {
 			const end = (await editEvents.next((r) => r.type === "tool_execution_end")) as Extract<PiRecord, { type: "tool_execution_end" }>;
 			expect(end.isError).toBe(false);
 			expect((end.result.details as { patch?: string }).patch).toContain("+Howdy");
-			expect(editEvents.records.some((r) => r.type === "extension_ui_request" && "title" in r)).toBe(false);
+			expect(
+				editEvents.records.some(
+					(r) =>
+						r.type === "extension_ui_request" &&
+						"title" in r &&
+						r.title.startsWith(PERMISSION_PROMPT_MARKER),
+				),
+			).toBe(false);
 			await editEvents.next((r) => r.type === "agent_settled");
 		} finally {
 			await edits.stop();
@@ -189,13 +211,89 @@ describe("pi RPC through the desktop launcher", () => {
 			expect(before.messages).toHaveLength(0);
 			await proc.request({ type: "prompt", message: "run bash please" });
 			await events.next((r) => r.type === "agent_settled");
-			expect(events.records.some((r) => r.type === "extension_ui_request" && "title" in r)).toBe(false);
+			expect(
+				events.records.some(
+					(r) =>
+						r.type === "extension_ui_request" &&
+						"title" in r &&
+						r.title.startsWith(PERMISSION_PROMPT_MARKER),
+				),
+			).toBe(false);
 			const end = events.records.find((r) => r.type === "tool_execution_end") as Extract<PiRecord, { type: "tool_execution_end" }>;
 			expect(end.isError).toBe(false);
 		} finally {
 			await proc.stop();
 		}
 	}, 60_000);
+
+	it("rewinds to an earlier user message in the same session file so it can be re-sent edited", async () => {
+		const proc = launch("auto");
+		const events = collect(proc);
+		const settles = () =>
+			events.records.filter((r) => r.type === "agent_settled").length;
+		const waitForSettle = async (count: number) => {
+			const deadline = Date.now() + 30_000;
+			while (settles() < count) {
+				if (Date.now() > deadline) throw new Error("Timed out waiting for settle");
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+		};
+		try {
+			await proc.request({ type: "prompt", message: "hello there" });
+			await waitForSettle(1);
+			const sessionFile = (
+				await proc.request<{ sessionFile: string }>({ type: "get_state" })
+			).sessionFile;
+			const afterFirst = await proc.request<{
+				entries: { id: string; type: string; message?: { role: string } }[];
+			}>({ type: "get_entries" });
+			const firstUserEntry = afterFirst.entries.find(
+				(entry) => entry.type === "message" && entry.message?.role === "user",
+			);
+			expect(firstUserEntry).toBeDefined();
+
+			await proc.request({ type: "prompt", message: "hello again" });
+			await waitForSettle(2);
+			expect(
+				(
+					await proc.request<{ messages: { role: string }[] }>({
+						type: "get_messages",
+					})
+				).messages.map((m) => m.role),
+			).toEqual(["system", "user", "assistant", "user", "assistant"]);
+
+			await proc.request({
+				type: "prompt",
+				message: `/desktop-rewind ${firstUserEntry?.id}`,
+			});
+
+			// Same session file: the rewind branches inside the tree rather than forking out,
+			// which is what keeps the edit inside the current desktop session.
+			expect(
+				(await proc.request<{ sessionFile: string }>({ type: "get_state" }))
+					.sessionFile,
+			).toBe(sessionFile);
+			// The edited message and everything after it are off the active branch.
+			expect(
+				(
+					await proc.request<{ messages: { role: string }[] }>({
+						type: "get_messages",
+					})
+				).messages.map((m) => m.role),
+			).toEqual(["system"]);
+			const rewound = await proc.request<{
+				entries: { id: string }[];
+				leafId: string | null;
+			}>({ type: "get_entries" });
+			expect(rewound.leafId).not.toBe(firstUserEntry?.id);
+			// The abandoned branch is still recorded in the same file.
+			expect(
+				rewound.entries.some((entry) => entry.id === firstUserEntry?.id),
+			).toBe(true);
+		} finally {
+			await proc.stop();
+		}
+	}, 90_000);
 
 	it("resumes an existing session file with --session", async () => {
 		const first = launch("auto");

@@ -1,6 +1,16 @@
 node_modules
 out
 dist
+.vitest
 *.log
 .DS_Store
 *.tsbuildinfo
+build/.DS_Store
+build/Assets.car
+build/*.app/
+build/*.icns
+portfolio documentation/
+
+# Output from the CDP verification harnesses.
+glayvin-pane-output/
+ui-smoke-output/

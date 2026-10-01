@@ -1,0 +1,267 @@
+{
+  "name": "cosmos-gui-figma-code-connect-seed",
+  "source": "This manifest is derived only from current renderer code. It is a mapping seed, not a working Code Connect configuration.",
+  "foundations": {
+    "tokenSource": "src/renderer/src/styles/tokens.css",
+    "styleSource": "src/renderer/src/styles/app.css",
+    "themes": ["light", "dark"]
+  },
+  "components": [
+    {
+      "figmaName": "Button",
+      "implementationType": "css-class",
+      "source": {
+        "style": "src/renderer/src/styles/app.css",
+        "usage": [
+          "src/renderer/src/components/ChatView.tsx",
+          "src/renderer/src/components/SettingsModal.tsx",
+          "src/renderer/src/components/DialogCard.tsx",
+          "src/renderer/src/components/HomeView.tsx",
+          "src/renderer/src/components/ToolCard.tsx"
+        ]
+      },
+      "selectors": [".btn", ".btn.primary", ".btn.danger", ".btn.small"],
+      "variants": {
+        "tone": ["default", "primary", "danger"],
+        "size": ["default", "small"]
+      }
+    },
+    {
+      "figmaName": "Icon Button",
+      "implementationType": "css-class",
+      "source": {
+        "style": "src/renderer/src/styles/app.css",
+        "usage": [
+          "src/renderer/src/App.tsx",
+          "src/renderer/src/components/ChatView.tsx",
+          "src/renderer/src/components/ChangesPanel.tsx",
+          "src/renderer/src/components/Markdown.tsx",
+          "src/renderer/src/components/ToolCard.tsx",
+          "src/renderer/src/components/Transcript.tsx"
+        ]
+      },
+      "selectors": [".icon-btn", ".icon-btn.active"],
+      "states": ["default", "hover", "active", "disabled"]
+    },
+    {
+      "figmaName": "Chip",
+      "implementationType": "css-class",
+      "source": {
+        "style": "src/renderer/src/styles/app.css",
+        "usage": [
+          "src/renderer/src/components/ChatView.tsx",
+          "src/renderer/src/components/Pickers.tsx"
+        ]
+      },
+      "selectors": [".chip"],
+      "states": ["default", "hover"]
+    },
+    {
+      "figmaName": "KBD",
+      "implementationType": "css-class",
+      "source": {
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "selectors": [".kbd"]
+    },
+    {
+      "figmaName": "Search Field",
+      "implementationType": "screen-structure",
+      "source": {
+        "style": "src/renderer/src/styles/app.css",
+        "component": "src/renderer/src/components/Sidebar.tsx"
+      },
+      "selectors": [".search", ".search input"],
+      "states": ["default", "focus-within"]
+    },
+    {
+      "figmaName": "Session Row",
+      "implementationType": "screen-structure",
+      "source": {
+        "style": "src/renderer/src/styles/app.css",
+        "component": "src/renderer/src/components/Sidebar.tsx"
+      },
+      "selectors": [
+        ".session-row",
+        ".session-row.active",
+        ".session-row.unread",
+        ".session-row.dragging",
+        ".session-row.drop-before",
+        ".session-row.drop-after",
+        ".status-dot",
+        ".spinner"
+      ],
+      "variants": {
+        "state": ["default", "active", "unread", "attention", "busy", "dragging"]
+      }
+    },
+    {
+      "figmaName": "Main Header",
+      "implementationType": "screen-structure",
+      "source": {
+        "style": "src/renderer/src/styles/app.css",
+        "component": "src/renderer/src/components/ChatView.tsx"
+      },
+      "selectors": [".main-header", ".main-header.scrolled", ".header-title", ".header-title-input"]
+    },
+    {
+      "figmaName": "Composer",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/Composer.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "selectors": [
+        ".composer-wrap",
+        ".composer-inner",
+        ".composer",
+        ".composer.drop",
+        ".composer-toolbar",
+        ".send-btn",
+        ".send-btn.stop",
+        ".attachments",
+        ".attachment",
+        ".queue-item"
+      ],
+      "variants": {
+        "mode": ["idle", "busy", "drag-over", "stop"]
+      }
+    },
+    {
+      "figmaName": "Popover Menu",
+      "implementationType": "shared-pattern",
+      "source": {
+        "component": "src/renderer/src/components/Pickers.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "selectors": [".popover", ".popover.up", ".popover-label", ".menu-item", ".menu-item-stack", ".filter"]
+    },
+    {
+      "figmaName": "Switch",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/SettingsModal.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "componentName": "Switch",
+      "props": ["on", "onChange", "label"],
+      "selectors": [".switch", ".switch.on"],
+      "variants": {
+        "state": ["off", "on"]
+      }
+    },
+    {
+      "figmaName": "Setting Row",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/SettingsModal.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "componentName": "Setting",
+      "props": ["name", "help", "children", "stacked"],
+      "selectors": [".setting", ".setting.stacked", ".setting-text", ".setting-control"],
+      "variants": {
+        "layout": ["default", "stacked"]
+      }
+    },
+    {
+      "figmaName": "Dialog Card",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/DialogCard.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "componentName": "DialogCard",
+      "selectors": [".dialog-card", ".dialog-card.permission", ".dialog-card-header", ".dialog-card-body", ".dialog-card-actions"],
+      "variants": {
+        "mode": ["permission", "confirm", "select", "input", "editor"]
+      }
+    },
+    {
+      "figmaName": "Tool Card",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/ToolCard.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "componentName": "ToolCard",
+      "selectors": [".fold", ".fold-header", ".tool-body"],
+      "variants": {
+        "status": ["pending", "running", "waiting", "done", "error", "skipped"]
+      }
+    },
+    {
+      "figmaName": "Changes Panel",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/ChangesPanel.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "componentName": "ChangesPanel",
+      "selectors": [".changes", ".changes-header", ".changes-body", ".change-file", ".change-file-header"]
+    },
+    {
+      "figmaName": "Markdown Code Block",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/Markdown.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "componentName": "Markdown",
+      "selectors": [".code-block", ".code-block-header"]
+    },
+    {
+      "figmaName": "Toast",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/Toasts.tsx",
+        "style": "src/renderer/src/styles/app.css"
+      },
+      "componentName": "Toasts",
+      "selectors": [".toasts", ".toast"]
+    },
+    {
+      "figmaName": "Cosmos Mark",
+      "implementationType": "react-component",
+      "source": {
+        "component": "src/renderer/src/components/CosmosMark.tsx"
+      },
+      "componentName": "CosmosMark",
+      "notes": "SVG uses currentColor and should be treated as a themable single-color mark."
+    }
+  ],
+  "exampleScreens": [
+    {
+      "figmaName": "Main Chat / With Sidebar / With Changes Panel",
+      "source": [
+        "src/renderer/src/App.tsx",
+        "src/renderer/src/components/Sidebar.tsx",
+        "src/renderer/src/components/ChatView.tsx",
+        "src/renderer/src/components/Composer.tsx",
+        "src/renderer/src/components/ChangesPanel.tsx",
+        "src/renderer/src/styles/app.css"
+      ],
+      "layout": {
+        "shell": "flex row",
+        "sidebarWidth": 272,
+        "headerHeight": 48,
+        "changesPanelWidth": 400,
+        "contentMaxWidth": 780
+      }
+    }
+  ],
+  "unresolved": [
+    {
+      "source": "src/renderer/src/components/ChatView.tsx",
+      "detail": "ContextMeter uses --danger, --warning, --accent, and --border-strong, which were not found in src/renderer/src/styles/tokens.css during this review."
+    },
+    {
+      "source": "src/renderer/src/components/ChangesPanel.tsx",
+      "detail": "Inline style references --border, which was not found in src/renderer/src/styles/tokens.css during this review."
+    },
+    {
+      "source": "src/renderer/src/components/LoginDialog.tsx",
+      "detail": "Inline style references --border, which was not found in src/renderer/src/styles/tokens.css during this review."
+    }
+  ]
+}

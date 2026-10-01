@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { userInfo } from "node:os";
-import log from "electron-log/main";
+import { runtimeLog as log } from "./runtime-log";
 
 const START = "__PI_DESKTOP_ENV_START__";
 const END = "__PI_DESKTOP_ENV_END__";

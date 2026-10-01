@@ -1,0 +1,8 @@
+{
+  "name": "@shipt/cosmos-package",
+  "private": true,
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions"]
+  }
+}

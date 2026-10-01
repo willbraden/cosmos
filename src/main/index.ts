@@ -1,9 +1,18 @@
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+import {
+	getAgentDir,
+	VERSION as PI_VERSION,
+} from "@earendil-works/pi-coding-agent";
 import {
 	app,
 	BrowserWindow,
@@ -19,15 +28,73 @@ import {
 	shell,
 } from "electron";
 import log from "electron-log/main";
-import type { AppInfo, MenuCommand, SessionMenuAction } from "../shared/ipc";
+import type {
+	AppInfo,
+	DesktopSettings,
+	MenuCommand,
+	SessionMenuAction,
+	WorkspaceHealth,
+} from "../shared/ipc";
+import {
+	ensureCosmosManagedAgentDir,
+	isCosmosManagedAgentDir,
+} from "./agent-home";
 import { AuthService } from "./auth-service";
-import { isDirectory, searchProjectFiles } from "./files";
+import { isDirectory, listProjectFiles, searchProjectFiles } from "./files";
 import { buildAppMenu } from "./menu";
-import { bridgeExtensionPath, launcherPath, resolvePiCliPath } from "./paths";
-import { SessionHost } from "./pi/session-host";
+import { getGlayvinProfileOverview } from "./glayvin-profile";
+import {
+	getMcpOverview,
+	removePersonalMcpServer,
+	upsertPersonalMcpServer,
+} from "./mcp-config";
+import {
+	FIGMA_XCODE_PLUGIN_URL,
+	getFigmaXcodeAuthStatus,
+	importXcodeFigmaAuthToPi,
+	resetFigmaAuth,
+} from "./figma-xcode-auth";
+import { probeFreshSessionActiveTools } from "./mcp-session-availability";
+import {
+	bridgeExtensionPath,
+	childNodePath,
+	cosmosPackagePath,
+	launcherPath,
+	resolvePiCliPath,
+} from "./paths";
+import {
+	detectGlayvinHome,
+	inferGlayvinHomeFromAgentDir,
+	readGlayvinTeams,
+	resolveGlayvinHomePath,
+	type RuntimePaths,
+} from "./glayvin-runtime";
 import { SessionIndex } from "./session-index";
+import type { SupervisorConfig } from "./session-supervisor-protocol";
+import { SessionSupervisorClient } from "./session-supervisor-client";
 import { SettingsStore } from "./settings";
 import { resolveShellEnv } from "./shell-env";
+import {
+	createCommandRunner,
+	discoverTeams,
+	registerGlayvinTeam,
+	setGlayvinTeamEnabled,
+} from "./team-discovery";
+import { getWorktreeSupport, previewManagedWorktree } from "./worktrees";
+import {
+	assertWorkspaceEntryName,
+	cloneWorkspaceRepo,
+	coreRepoCloneUrl,
+	findCoreRepo,
+	inspectWorkspace,
+	isPathInsideWorkspace,
+	isValidRepoName,
+	linkWorkspaceRepo,
+	normalizeOrg,
+	resolveCoreRepos,
+	unlinkWorkspaceRepo,
+	workspaceEntryPath,
+} from "./workspace";
 
 // ---- Observability: persistent logs + local crash dumps from the first line ----
 log.initialize();
@@ -35,25 +102,276 @@ log.transports.file.level = "info";
 log.transports.console.level = app.isPackaged ? false : "debug";
 log.errorHandler.startCatching({ showDialog: false });
 crashReporter.start({ uploadToServer: false });
-log.info(`Cosmos ${app.getVersion()} starting (pi ${PI_VERSION}, electron ${process.versions.electron})`);
+log.info(
+	`Cosmos ${app.getVersion()} starting (pi ${PI_VERSION}, electron ${process.versions.electron})`,
+);
 
 const here = dirname(fileURLToPath(import.meta.url));
+const INITIAL_PI_CODING_AGENT_DIR = process.env.PI_CODING_AGENT_DIR;
+const INITIAL_GLAYVIN_HOME =
+	process.env.GLAYVIN_HOME ||
+	inferGlayvinHomeFromAgentDir(INITIAL_PI_CODING_AGENT_DIR) ||
+	detectGlayvinHome();
 let mainWindow: BrowserWindow | null = null;
 
-if (!app.requestSingleInstanceLock()) {
-	app.quit();
-} else {
+if (app.requestSingleInstanceLock()) {
 	app.on("second-instance", () => focusWindow());
 	void app.whenReady().then(start);
+} else {
+	app.quit();
 }
 
 let settings: SettingsStore;
 let sessions: SessionIndex;
-let host: SessionHost;
+let host: SessionSupervisorClient;
 let auth: AuthService;
 
 function send(channel: string, payload?: unknown): void {
-	if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+	if (mainWindow && !mainWindow.isDestroyed())
+		mainWindow.webContents.send(channel, payload);
+}
+
+function refreshAppMenu(): void {
+	Menu.setApplicationMenu(
+		buildAppMenu((command: MenuCommand) => send("menu:command", command), {
+			developerMode: settings.get().developerMode,
+		}),
+	);
+}
+
+function resolveWorkspaceRootPath(settingsValue: DesktopSettings): string {
+	return settingsValue.workspaceRootPath || join(homedir(), "Cosmos");
+}
+
+function currentWorkspaceHealth(): WorkspaceHealth {
+	const current = settings.get();
+	const teams = readGlayvinTeams(
+		resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME),
+	);
+	return inspectWorkspace(
+		resolveWorkspaceRootPath(current),
+		current.coreRepoOrg,
+		teams,
+		resolveCoreRepos(teams),
+	);
+}
+
+/** Read fresh each time, so registering a team takes effect without a restart. */
+function currentCoreRepos(current: DesktopSettings) {
+	return resolveCoreRepos(
+		readGlayvinTeams(resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME)),
+	);
+}
+
+/** Repos with a clone in flight, so a double-click cannot start two of them. */
+const cloningRepos = new Set<string>();
+
+/** Teams mid-join, for the same reason: clone plus register must not run twice. */
+const joiningTeams = new Set<string>();
+
+async function currentTeamDiscovery(options: { refresh: boolean }) {
+	const current = settings.get();
+	const glayvinHome = resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME);
+	return discoverTeams({
+		org: current.coreRepoOrg,
+		userDataDir: app.getPath("userData"),
+		workspaceRootPath: resolveWorkspaceRootPath(current),
+		glayvinHome,
+		teams: readGlayvinTeams(glayvinHome),
+		refresh: options.refresh,
+		run: createCommandRunner(await resolveShellEnv(), glayvinHome),
+	});
+}
+
+/**
+ * Folder picker for symlink targets. Unlike `dialog:pick-folder` this deliberately
+ * allows folders outside the workspace root, since the point is to link one in.
+ */
+async function pickLinkTarget(
+	event: Electron.IpcMainInvokeEvent,
+	title: string,
+): Promise<string | null> {
+	const win = BrowserWindow.fromWebContents(event.sender);
+	const options = {
+		title,
+		defaultPath: homedir(),
+		buttonLabel: "Link",
+		properties: ["openDirectory" as const],
+	};
+	const result = win
+		? await dialog.showOpenDialog(win, options)
+		: await dialog.showOpenDialog(options);
+	const chosen = result.canceled ? null : (result.filePaths[0] ?? null);
+	return chosen ? resolve(chosen) : null;
+}
+
+function sessionSupervisorSocketPath(): string {
+	return join(app.getPath("userData"), "session-supervisor.sock");
+}
+
+function buildSupervisorConfig(
+	settingsValue: DesktopSettings,
+	workspaceRoot: string,
+): SupervisorConfig {
+	const resolved = resolvePiCliPath(settingsValue.piCliPath);
+	if (!resolved.bundled) log.info(`Using custom pi CLI at ${resolved.path}`);
+	else if (settingsValue.piCliPath)
+		log.warn(
+			`Custom pi CLI not found (${settingsValue.piCliPath}); using bundled pi`,
+		);
+	return {
+		nodePath: childNodePath(),
+		launcherPath: launcherPath(),
+		extensionPath: bridgeExtensionPath(),
+		cliPath: resolved.path,
+		workspaceRoot,
+		idleSuspendMinutes: settingsValue.idleSuspendMinutes,
+		agentDir: process.env.PI_CODING_AGENT_DIR,
+		glayvinHome: process.env.GLAYVIN_HOME,
+	};
+}
+
+const FIGMA_TOOL_NAMES = new Set([
+	"get_design_context",
+	"get_screenshot",
+	"use_figma",
+	"search_design_system",
+	"get_libraries",
+	"get_metadata",
+	"create_new_file",
+	"whoami",
+]);
+
+async function annotateMcpSessionAvailability(
+	overview: Awaited<ReturnType<typeof getMcpOverview>>,
+): Promise<Awaited<ReturnType<typeof getMcpOverview>>> {
+	const figma = overview.servers.find(
+		(server) =>
+			server.name === "figma" &&
+			server.active &&
+			server.auth === "oauth" &&
+			server.oauthConnected,
+	);
+	if (!figma) return overview;
+	try {
+		const cwd = existsSync(resolveWorkspaceRootPath(settings.get()))
+			? resolveWorkspaceRootPath(settings.get())
+			: homedir();
+		const tools = await probeFreshSessionActiveTools({
+			nodePath: childNodePath(),
+			launcherPath: launcherPath(),
+			cliPath: resolvePiCliPath(settings.get().piCliPath).path,
+			extensionPath: bridgeExtensionPath(),
+			cwd,
+			env: {
+				...(await resolveShellEnv()),
+				...(process.env.PI_CODING_AGENT_DIR
+					? { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR }
+					: {}),
+				...(process.env.GLAYVIN_HOME
+					? { GLAYVIN_HOME: process.env.GLAYVIN_HOME }
+					: {}),
+				ELECTRON_RUN_AS_NODE: "1",
+				PI_DESKTOP: "1",
+				COSMOS_DESKTOP: "1",
+				COSMOS_WORKSPACE_ROOT: resolveWorkspaceRootPath(settings.get()),
+				COSMOS_SESSION_CWD: cwd,
+				PI_DESKTOP_PERMISSION_MODE: settings.get().permissionMode,
+			},
+		});
+		const expected = figma.tools.filter((name) => name !== "*");
+		const matches = tools.some((name) =>
+			expected.length > 0 ? expected.includes(name) : FIGMA_TOOL_NAMES.has(name),
+		);
+		return {
+			...overview,
+			servers: overview.servers.map((server) =>
+				server.name === figma.name
+					? {
+							...server,
+							sessionAvailable: matches,
+							sessionAvailabilityMessage: matches
+								? "Fresh sessions can see the Figma tools."
+								: "Cosmos found the Figma sign-in, but a fresh Pi session still did not load the Figma tools.",
+						}
+					: server,
+			),
+		};
+	} catch (error) {
+		return {
+			...overview,
+			servers: overview.servers.map((server) =>
+				server.name === figma.name
+					? {
+							...server,
+							sessionAvailable: false,
+							sessionAvailabilityMessage:
+								error instanceof Error
+									? `Cosmos could not verify Figma in a fresh session: ${error.message}`
+									: "Cosmos could not verify Figma in a fresh session.",
+						}
+					: server,
+			),
+		};
+	}
+}
+
+function resolveRuntimePaths(paths: RuntimePaths): {
+	agentDir: string;
+	glayvinHome?: string;
+	managed: boolean;
+} {
+	const glayvinHome = resolveGlayvinHomePath(paths, INITIAL_GLAYVIN_HOME);
+	if (paths.agentDirPath) {
+		return {
+			agentDir: paths.agentDirPath,
+			glayvinHome,
+			managed: false,
+		};
+	}
+	if (paths.glayvinHomePath) {
+		return {
+			agentDir: join(paths.glayvinHomePath, ".pi", "agent"),
+			glayvinHome,
+			managed: false,
+		};
+	}
+	return {
+		agentDir: ensureCosmosManagedAgentDir(
+			app.getPath("userData"),
+			getSeedAgentDirs(),
+			cosmosPackagePath(),
+		),
+		glayvinHome,
+		managed: true,
+	};
+}
+
+function getSeedAgentDirs(): string[] {
+	return [
+		INITIAL_PI_CODING_AGENT_DIR,
+		INITIAL_GLAYVIN_HOME ? join(INITIAL_GLAYVIN_HOME, ".pi", "agent") : undefined,
+		join(homedir(), ".pi", "agent"),
+	].filter(
+		(path): path is string => typeof path === "string" && path.length > 0,
+	);
+}
+
+function applyRuntimeEnv(paths: RuntimePaths): void {
+	const runtime = resolveRuntimePaths(paths);
+	process.env.PI_CODING_AGENT_DIR = runtime.agentDir;
+	if (runtime.glayvinHome) process.env.GLAYVIN_HOME = runtime.glayvinHome;
+	else delete process.env.GLAYVIN_HOME;
+}
+
+function sameRuntimePaths(a: RuntimePaths, b: RuntimePaths): boolean {
+	return (
+		a.agentDirPath === b.agentDirPath && a.glayvinHomePath === b.glayvinHomePath
+	);
+}
+
+function resolveCurrentGlayvinHome(agentDir: string): string | undefined {
+	return process.env.GLAYVIN_HOME || inferGlayvinHomeFromAgentDir(agentDir);
 }
 
 /** The app was called "Pi Desktop" before; carry its settings over once. */
@@ -76,11 +394,13 @@ function migrateLegacyUserData(): void {
 async function start(): Promise<void> {
 	migrateLegacyUserData();
 	settings = new SettingsStore();
+	applyRuntimeEnv(settings.get());
 	app.setAboutPanelOptions({
 		applicationName: "Cosmos",
 		applicationVersion: app.getVersion(),
 		version: `pi ${PI_VERSION}`,
-		credits: "A desktop app for the pi coding agent (github.com/earendil-works/pi).",
+		credits:
+			"A desktop app for the pi coding agent (github.com/earendil-works/pi).",
 		copyright: "© 2026 Will Braden",
 	});
 	// Packaged builds get the icon from the bundle; show it in the Dock during development too.
@@ -89,9 +409,39 @@ async function start(): Promise<void> {
 		if (existsSync(icon)) app.dock?.setIcon(icon);
 	}
 	nativeTheme.themeSource = settings.get().theme;
+	let runtimePaths: RuntimePaths = {
+		agentDirPath: settings.get().agentDirPath,
+		glayvinHomePath: settings.get().glayvinHomePath,
+	};
+	let workspaceRoot = resolveWorkspaceRootPath(settings.get());
 	settings.onChange((next) => {
 		nativeTheme.themeSource = next.theme;
 		send("settings:changed", next);
+		refreshAppMenu();
+		const nextRuntimePaths: RuntimePaths = {
+			agentDirPath: next.agentDirPath,
+			glayvinHomePath: next.glayvinHomePath,
+		};
+		const runtimePathsChanged = !sameRuntimePaths(runtimePaths, nextRuntimePaths);
+		const nextWorkspaceRoot = resolveWorkspaceRootPath(next);
+		const workspaceRootChanged = nextWorkspaceRoot !== workspaceRoot;
+		if (runtimePathsChanged) {
+			applyRuntimeEnv(nextRuntimePaths);
+			sessions?.restart();
+			send("auth:changed");
+			runtimePaths = nextRuntimePaths;
+		}
+		if (workspaceRootChanged) workspaceRoot = nextWorkspaceRoot;
+		const nextConfig = buildSupervisorConfig(next, workspaceRoot);
+		void host
+			?.configure(nextConfig)
+			.then(() => {
+				if (runtimePathsChanged || workspaceRootChanged)
+					return host.restartForNewCredentials();
+			})
+			.catch((error) =>
+				log.error("Could not reconfigure session supervisor", error),
+			);
 	});
 
 	// Resolve the login-shell environment early; the first session waits on it anyway.
@@ -100,39 +450,33 @@ async function start(): Promise<void> {
 	sessions = new SessionIndex(() => send("sessions:changed"));
 	sessions.start();
 
-	host = new SessionHost(
-		{
-			nodePath: process.execPath,
-			launcherPath: launcherPath(),
-			extensionPath: bridgeExtensionPath(),
-			cliPath: () => {
-				const resolved = resolvePiCliPath(settings.get().piCliPath);
-				if (!resolved.bundled) log.info(`Using custom pi CLI at ${resolved.path}`);
-				else if (settings.get().piCliPath) log.warn(`Custom pi CLI not found (${settings.get().piCliPath}); using bundled pi`);
-				return resolved.path;
-			},
-			env: resolveShellEnv,
-			idleSuspendMinutes: () => settings.get().idleSuspendMinutes,
-		},
-		{
+	host = new SessionSupervisorClient({
+		socketPath: sessionSupervisorSocketPath(),
+		nodePath: childNodePath(),
+		sink: {
 			events: (batches) => {
 				for (const batch of batches) send("session:events", batch);
 			},
 			exit: (exit) => send("session:exit", exit),
 		},
-	);
+		log: {
+			info: (message) => log.info(message),
+			warn: (message) => log.warn(message),
+		},
+	});
+	await host.start(buildSupervisorConfig(settings.get(), workspaceRoot));
 
 	auth = new AuthService({
 		event: (event) => send("auth:event", event),
 		prompt: (prompt) => send("auth:prompt", prompt),
 		credentialsChanged: () => {
-			host.restartForNewCredentials();
+			void host.restartForNewCredentials();
 			send("auth:changed");
 		},
 	});
 
 	registerIpc();
-	Menu.setApplicationMenu(buildAppMenu((command: MenuCommand) => send("menu:command", command)));
+	refreshAppMenu();
 	createWindow();
 
 	app.on("activate", () => {
@@ -143,14 +487,22 @@ async function start(): Promise<void> {
 
 // ---- Window ---------------------------------------------------------------
 
-const windowStateFile = () => join(app.getPath("userData"), "window-state.json");
+const windowStateFile = () =>
+	join(app.getPath("userData"), "window-state.json");
 
 function loadBounds(): Partial<Rectangle> {
 	try {
-		const bounds = JSON.parse(readFileSync(windowStateFile(), "utf8")) as Rectangle;
+		const bounds = JSON.parse(
+			readFileSync(windowStateFile(), "utf8"),
+		) as Rectangle;
 		const visible = screen.getAllDisplays().some((display) => {
 			const area = display.workArea;
-			return bounds.x < area.x + area.width && bounds.x + bounds.width > area.x && bounds.y < area.y + area.height && bounds.y + bounds.height > area.y;
+			return (
+				bounds.x < area.x + area.width &&
+				bounds.x + bounds.width > area.x &&
+				bounds.y < area.y + area.height &&
+				bounds.y + bounds.height > area.y
+			);
 		});
 		return visible ? bounds : { width: bounds.width, height: bounds.height };
 	} catch {
@@ -208,7 +560,9 @@ function createWindow(): void {
 			if (isWebUrl(url)) void shell.openExternal(url);
 		}
 	});
-	win.webContents.on("render-process-gone", (_event, details) => log.error("Renderer process gone", details));
+	win.webContents.on("render-process-gone", (_event, details) =>
+		log.error("Renderer process gone", details),
+	);
 
 	if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
 		void win.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -250,96 +604,359 @@ function isWebUrl(url: unknown): url is string {
 }
 
 function requireAbsolute(path: unknown): string {
-	if (typeof path !== "string" || !isAbsolute(path)) throw new Error("Expected an absolute path");
+	if (typeof path !== "string" || !isAbsolute(path))
+		throw new Error("Expected an absolute path");
 	return path;
 }
 
 function registerIpc(): void {
-	ipcMain.handle("app:info", (): AppInfo => ({
-		appVersion: app.getVersion(),
-		piVersion: PI_VERSION,
-		electronVersion: process.versions.electron,
-		platform: process.platform,
-		homeDir: homedir(),
-		agentDir: getAgentDir(),
-		logPath: log.transports.file.getFile().path,
-	}));
-
-	ipcMain.handle("settings:get", () => settings.get());
-	ipcMain.handle("settings:update", (_e, patch: unknown) => settings.update(patch));
-
-	ipcMain.handle("sessions:list", () => sessions.list());
-	ipcMain.handle("sessions:search", (_e, query: unknown) => (typeof query === "string" ? sessions.search(query) : []));
-	ipcMain.handle("sessions:delete", (_e, path: unknown) => sessions.trash(requireAbsolute(path)));
-	ipcMain.handle("sessions:context-menu", (event, path: unknown, pinned: unknown) => {
-		requireAbsolute(path);
-		return new Promise<SessionMenuAction | null>((resolve) => {
-			let chosen: SessionMenuAction | null = null;
-			const item = (label: string, action: SessionMenuAction) => ({ label, click: () => (chosen = action) });
-			const menu = Menu.buildFromTemplate([
-				item("Rename…", "rename"),
-				item(pinned ? "Unpin" : "Pin to Top", pinned ? "unpin" : "pin"),
-				{ type: "separator" },
-				item("Export as HTML…", "exportHtml"),
-				item("Reveal Session File in Finder", "reveal"),
-				item("Copy Session Path", "copyPath"),
-				{ type: "separator" },
-				item("Move to Trash…", "delete"),
-			]);
-			const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
-			menu.popup({ window: win, callback: () => resolve(chosen) });
-		});
+	ipcMain.handle("app:info", (): AppInfo => {
+		const agentDir = getAgentDir();
+		const glayvinHome = resolveCurrentGlayvinHome(agentDir);
+		return {
+			appVersion: app.getVersion(),
+			piVersion: PI_VERSION,
+			electronVersion: process.versions.electron,
+			platform: process.platform,
+			homeDir: homedir(),
+			agentDir,
+			glayvinHome,
+			workspaceRoot: resolveWorkspaceRootPath(settings.get()),
+			agentDirSource: isCosmosManagedAgentDir(agentDir)
+				? "cosmos-managed"
+				: glayvinHome
+					? "glayvin"
+					: "custom",
+			logPath: log.transports.file.getFile().path,
+		};
 	});
 
+	ipcMain.handle("settings:get", () => settings.get());
+	ipcMain.handle("settings:update", (_e, patch: unknown) =>
+		settings.update(patch),
+	);
+	ipcMain.handle("workspace:health", () => currentWorkspaceHealth());
+	ipcMain.handle("workspace:clone-repo", async (_e, name: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(name ?? ""));
+		const current = settings.get();
+		const repo = findCoreRepo(repoName, currentCoreRepos(current));
+		if (!repo) {
+			throw new Error(`${repoName} is not one of the suggested repos.`);
+		}
+		if (cloningRepos.has(repoName)) {
+			throw new Error(`${repoName} is already being cloned.`);
+		}
+		const rootPath = resolveWorkspaceRootPath(current);
+		cloningRepos.add(repoName);
+		try {
+			send("workspace:progress", { name: repoName, message: "Starting clone…" });
+			await cloneWorkspaceRepo({
+				rootPath,
+				name: repoName,
+				url: coreRepoCloneUrl(repoName, repo.org ?? current.coreRepoOrg),
+				env: await resolveShellEnv(),
+				onProgress: (message) =>
+					send("workspace:progress", { name: repoName, message }),
+			});
+			log.info(`Cloned ${repoName} into ${rootPath}`);
+			return currentWorkspaceHealth();
+		} finally {
+			cloningRepos.delete(repoName);
+			send("workspace:progress", { name: repoName, message: "" });
+		}
+	});
+	ipcMain.handle("workspace:link-repo", async (event, name: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(name ?? ""));
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		const targetPath = await pickLinkTarget(event, `Choose the existing ${repoName} checkout`);
+		if (!targetPath) return currentWorkspaceHealth();
+		linkWorkspaceRepo({ rootPath, name: repoName, targetPath });
+		log.info(`Linked ${rootPath}/${repoName} -> ${targetPath}`);
+		return currentWorkspaceHealth();
+	});
+	ipcMain.handle("workspace:link-existing", async (event) => {
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		const targetPath = await pickLinkTarget(
+			event,
+			"Choose an existing project folder to link into the workspace",
+		);
+		if (!targetPath) return null;
+		const name = assertWorkspaceEntryName(basename(targetPath));
+		linkWorkspaceRepo({ rootPath, name, targetPath });
+		log.info(`Linked ${rootPath}/${name} -> ${targetPath}`);
+		return currentWorkspaceHealth();
+	});
+	ipcMain.handle("workspace:unlink-repo", (_e, name: unknown) => {
+		const rootPath = resolveWorkspaceRootPath(settings.get());
+		unlinkWorkspaceRepo(rootPath, String(name ?? ""));
+		return currentWorkspaceHealth();
+	});
+	ipcMain.handle("teams:discover", async (_e, options: unknown) => {
+		const refresh = !!(options as { refresh?: unknown } | null)?.refresh;
+		return currentTeamDiscovery({ refresh });
+	});
+	ipcMain.handle("teams:join", async (_e, repo: unknown) => {
+		const repoName = assertWorkspaceEntryName(String(repo ?? ""));
+		if (!isValidRepoName(repoName)) {
+			throw new Error(`${repoName} is not a valid repository name.`);
+		}
+		if (joiningTeams.has(repoName)) {
+			throw new Error(`${repoName} is already being joined.`);
+		}
+		const current = settings.get();
+		const rootPath = resolveWorkspaceRootPath(current);
+		const org = normalizeOrg(current.coreRepoOrg);
+		const target = workspaceEntryPath(rootPath, repoName);
+		joiningTeams.add(repoName);
+		try {
+			if (!existsSync(target)) {
+				send("workspace:progress", { name: repoName, message: "Starting clone…" });
+				await cloneWorkspaceRepo({
+					rootPath,
+					name: repoName,
+					url: coreRepoCloneUrl(repoName, org),
+					env: await resolveShellEnv(),
+					onProgress: (message) =>
+						send("workspace:progress", { name: repoName, message }),
+				});
+			}
+			send("workspace:progress", { name: repoName, message: "Registering with Glayvin…" });
+			await registerGlayvinTeam({
+				name: repoName,
+				path: target,
+				run: createCommandRunner(
+					await resolveShellEnv(),
+					resolveGlayvinHomePath(current, INITIAL_GLAYVIN_HOME),
+				),
+			});
+			log.info(`Joined team ${repoName} at ${target}`);
+			return currentTeamDiscovery({ refresh: false });
+		} finally {
+			joiningTeams.delete(repoName);
+			send("workspace:progress", { name: repoName, message: "" });
+		}
+	});
+	ipcMain.handle(
+		"teams:set-enabled",
+		async (_e, name: unknown, enabled: unknown) => {
+			const teamName = String(name ?? "").trim();
+			if (!teamName) throw new Error("A team name is required.");
+			if (joiningTeams.has(teamName)) {
+				throw new Error(`${teamName} is busy.`);
+			}
+			joiningTeams.add(teamName);
+			try {
+				await setGlayvinTeamEnabled({
+					name: teamName,
+					enabled: !!enabled,
+					run: createCommandRunner(
+						await resolveShellEnv(),
+						resolveGlayvinHomePath(settings.get(), INITIAL_GLAYVIN_HOME),
+					),
+				});
+				log.info(`${enabled ? "Enabled" : "Disabled"} team ${teamName}`);
+				return currentTeamDiscovery({ refresh: false });
+			} finally {
+				joiningTeams.delete(teamName);
+			}
+		},
+	);
+	ipcMain.handle("mcp:overview", async () => {
+		const agentDir = getAgentDir();
+		const overview = await getMcpOverview(
+			resolveCurrentGlayvinHome(agentDir),
+			agentDir,
+		);
+		return annotateMcpSessionAvailability(overview);
+	});
+	ipcMain.handle("glayvin:profile-overview", () =>
+		getGlayvinProfileOverview(resolveCurrentGlayvinHome(getAgentDir())),
+	);
+	ipcMain.handle("figma:xcode-status", async () =>
+		getFigmaXcodeAuthStatus(getAgentDir()),
+	);
+	ipcMain.handle("figma:xcode-plugin-install", () =>
+		shell.openExternal(FIGMA_XCODE_PLUGIN_URL),
+	);
+	ipcMain.handle("figma:xcode-import-auth", async () => {
+		const result = await importXcodeFigmaAuthToPi(getAgentDir());
+		await host.restartForNewCredentials();
+		return result;
+	});
+	ipcMain.handle("figma:reset-auth", async () => {
+		const result = await resetFigmaAuth(getAgentDir());
+		await host.restartForNewCredentials();
+		return result;
+	});
+	ipcMain.handle(
+		"mcp:upsert-personal",
+		async (_e, name: unknown, config: unknown) => {
+			const agentDir = getAgentDir();
+			upsertPersonalMcpServer(
+				resolveCurrentGlayvinHome(agentDir),
+				String(name ?? ""),
+				config,
+			);
+			await host.restartForNewCredentials();
+			return annotateMcpSessionAvailability(
+				await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir),
+			);
+		},
+	);
+	ipcMain.handle("mcp:remove-personal", async (_e, name: unknown) => {
+		const agentDir = getAgentDir();
+		removePersonalMcpServer(
+			resolveCurrentGlayvinHome(agentDir),
+			String(name ?? ""),
+		);
+		await host.restartForNewCredentials();
+		return annotateMcpSessionAvailability(
+			await getMcpOverview(resolveCurrentGlayvinHome(agentDir), agentDir),
+		);
+	});
+
+	ipcMain.handle("sessions:list", () => sessions.list());
+	ipcMain.handle("sessions:search", (_e, query: unknown) =>
+		typeof query === "string" ? sessions.search(query) : [],
+	);
+	ipcMain.handle("sessions:delete", (_e, path: unknown) =>
+		sessions.trash(requireAbsolute(path)),
+	);
+
 	ipcMain.handle("session:open", async (_e, request: unknown) => {
-		const req = request as { tabId?: unknown; sessionPath?: unknown; cwd?: unknown; permissionMode?: unknown };
+		const req = request as {
+			tabId?: unknown;
+			sessionPath?: unknown;
+			cwd?: unknown;
+			permissionMode?: unknown;
+		};
 		const cwd = requireAbsolute(req?.cwd);
+		const workspaceRoot = resolveWorkspaceRootPath(settings.get());
+		if (!isPathInsideWorkspace(cwd, workspaceRoot)) {
+			throw new Error(
+				`Cosmos only opens repositories inside ${workspaceRoot}. Move or clone the repo there, then try again.`,
+			);
+		}
 		await host.open({
 			tabId: String(req.tabId),
 			cwd,
-			sessionPath: req.sessionPath === undefined ? undefined : requireAbsolute(req.sessionPath),
+			sessionPath:
+				req.sessionPath === undefined
+					? undefined
+					: requireAbsolute(req.sessionPath),
 			permissionMode: req.permissionMode as never,
 		});
 		settings.addRecentProject(cwd);
 	});
+	ipcMain.handle("session:live-state", () => host.getSnapshot());
 	ipcMain.handle("session:command", (_e, tabId: unknown, command: unknown) => {
 		const cmd = command as { type?: unknown };
-		if (!cmd || typeof cmd !== "object" || typeof cmd.type !== "string") throw new Error("Invalid command");
+		if (!cmd || typeof cmd !== "object" || typeof cmd.type !== "string")
+			throw new Error("Invalid command");
 		return host.command(String(tabId), cmd as { type: string });
 	});
-	ipcMain.handle("session:ui-response", (_e, tabId: unknown, response: unknown) => {
-		if (!response || typeof response !== "object") throw new Error("Invalid UI response");
-		host.respondToUi(String(tabId), response as Record<string, unknown>);
-	});
-	ipcMain.handle("session:close", (_e, tabId: unknown) => host.close(String(tabId)));
-	ipcMain.on("session:visible", (_e, tabId: unknown) => host.setVisible(typeof tabId === "string" ? tabId : null));
+	ipcMain.handle(
+		"session:ui-response",
+		async (_e, tabId: unknown, response: unknown) => {
+			if (!response || typeof response !== "object")
+				throw new Error("Invalid UI response");
+			await host.respondToUi(String(tabId), response as Record<string, unknown>);
+		},
+	);
+	ipcMain.handle("session:close", (_e, tabId: unknown) =>
+		host.close(String(tabId)),
+	);
+	ipcMain.on("session:visible", (_e, tabId: unknown) =>
+		host.setVisible(typeof tabId === "string" ? tabId : null),
+	);
 
 	ipcMain.handle("dialog:pick-folder", async (event) => {
 		const win = BrowserWindow.fromWebContents(event.sender);
-		const options = { title: "Choose a project folder", properties: ["openDirectory", "createDirectory"] as const };
+		const workspaceRoot = resolveWorkspaceRootPath(settings.get());
+		const options = {
+			title: "Choose a project folder inside the Cosmos workspace",
+			defaultPath: workspaceRoot,
+			properties: ["openDirectory", "createDirectory"] as const,
+		};
 		const result = win
-			? await dialog.showOpenDialog(win, { ...options, properties: [...options.properties] })
-			: await dialog.showOpenDialog({ ...options, properties: [...options.properties] });
-		return result.canceled ? null : (result.filePaths[0] ?? null);
+			? await dialog.showOpenDialog(win, {
+					...options,
+					properties: [...options.properties],
+				})
+			: await dialog.showOpenDialog({
+					...options,
+					properties: [...options.properties],
+				});
+		const chosen = result.canceled ? null : (result.filePaths[0] ?? null);
+		if (!chosen) return null;
+		if (!isPathInsideWorkspace(chosen, workspaceRoot)) {
+			throw new Error(
+				`Choose a folder inside ${workspaceRoot}. Cosmos is locked to the company workspace.`,
+			);
+		}
+		return resolve(chosen);
+	});
+	ipcMain.handle("workspace:create-experiment", (_event, name: unknown) => {
+		if (typeof name !== "string") throw new Error("Experiment name is required");
+		const trimmed = assertWorkspaceEntryName(name);
+		const workspaceRoot = resolveWorkspaceRootPath(settings.get());
+		const experimentPath = workspaceEntryPath(workspaceRoot, trimmed);
+		if (existsSync(experimentPath)) {
+			throw new Error(
+				`A folder named ${trimmed} already exists in ${workspaceRoot}.`,
+			);
+		}
+		mkdirSync(experimentPath, { recursive: true });
+		return experimentPath;
 	});
 	ipcMain.handle("dialog:save", async (event, defaultName: unknown) => {
 		const win = BrowserWindow.fromWebContents(event.sender);
 		const opts = {
-			defaultPath: join(app.getPath("downloads"), typeof defaultName === "string" ? defaultName.replace(/[/\\]/g, "-") : "session.html"),
+			defaultPath: join(
+				app.getPath("downloads"),
+				typeof defaultName === "string"
+					? defaultName.replace(/[/\\]/g, "-")
+					: "session.html",
+			),
 			filters: [{ name: "HTML", extensions: ["html"] }],
 		};
-		const result = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+		const result = win
+			? await dialog.showSaveDialog(win, opts)
+			: await dialog.showSaveDialog(opts);
 		return result.canceled ? null : (result.filePath ?? null);
 	});
-	ipcMain.handle("files:search", (_e, cwd: unknown, query: unknown) => searchProjectFiles(requireAbsolute(cwd), String(query ?? "")));
+	ipcMain.handle("files:search", (_e, cwd: unknown, query: unknown) =>
+		searchProjectFiles(requireAbsolute(cwd), String(query ?? "")),
+	);
+	ipcMain.handle("files:list", (_e, cwd: unknown, dir: unknown) =>
+		listProjectFiles(requireAbsolute(cwd), typeof dir === "string" ? dir : ""),
+	);
+	ipcMain.handle("worktrees:support", (_e, cwd: unknown) =>
+		getWorktreeSupport(requireAbsolute(cwd), app.getPath("userData")),
+	);
+	ipcMain.handle(
+		"worktrees:preview",
+		(_e, cwd: unknown, taskGroupId: unknown, workerId: unknown) =>
+			previewManagedWorktree(
+				requireAbsolute(cwd),
+				app.getPath("userData"),
+				String(taskGroupId ?? ""),
+				String(workerId ?? ""),
+			),
+	);
 
 	ipcMain.handle("shell:open-path", async (_e, path: unknown) => {
 		const error = await shell.openPath(requireAbsolute(path));
 		if (error) throw new Error(error);
 	});
-	ipcMain.handle("shell:reveal", (_e, path: unknown) => shell.showItemInFolder(requireAbsolute(path)));
+	ipcMain.handle("shell:reveal", (_e, path: unknown) =>
+		shell.showItemInFolder(requireAbsolute(path)),
+	);
 	ipcMain.handle("shell:open-in-editor", (_e, path: unknown, line: unknown) =>
-		openInEditor(requireAbsolute(path), typeof line === "number" && line > 0 ? Math.floor(line) : undefined),
+		openInEditor(
+			requireAbsolute(path),
+			typeof line === "number" && line > 0 ? Math.floor(line) : undefined,
+		),
 	);
 	ipcMain.handle("shell:open-terminal", async (_e, cwd: unknown) => {
 		const dir = requireAbsolute(cwd);
@@ -351,7 +968,9 @@ function registerIpc(): void {
 		if (!isWebUrl(url)) throw new Error("Only http(s) links can be opened");
 		return shell.openExternal(url);
 	});
-	ipcMain.handle("clipboard:write", (_e, text: unknown) => clipboard.writeText(String(text ?? "")));
+	ipcMain.handle("clipboard:write", (_e, text: unknown) =>
+		clipboard.writeText(String(text ?? "")),
+	);
 
 	ipcMain.handle("auth:providers", () => auth.listProviders());
 	ipcMain.handle("auth:login", (_e, providerId: unknown, method: unknown) =>
@@ -361,12 +980,21 @@ function registerIpc(): void {
 		auth.answerPrompt(String(promptId), typeof value === "string" ? value : null),
 	);
 	ipcMain.on("auth:cancel", () => auth.cancelLogin());
-	ipcMain.handle("auth:logout", (_e, providerId: unknown) => auth.logout(String(providerId)));
+	ipcMain.handle("auth:logout", (_e, providerId: unknown) =>
+		auth.logout(String(providerId)),
+	);
 
 	ipcMain.on("app:notify", (_e, options: unknown) => {
-		const { title, body, tabId } = (options ?? {}) as { title?: unknown; body?: unknown; tabId?: unknown };
+		const { title, body, tabId } = (options ?? {}) as {
+			title?: unknown;
+			body?: unknown;
+			tabId?: unknown;
+		};
 		if (!settings.get().notifications || !Notification.isSupported()) return;
-		const notification = new Notification({ title: String(title ?? "Cosmos"), body: String(body ?? "").slice(0, 300) });
+		const notification = new Notification({
+			title: String(title ?? "Cosmos"),
+			body: String(body ?? "").slice(0, 300),
+		});
 		notification.on("click", () => {
 			focusWindow();
 			send("notification:click", String(tabId ?? ""));
@@ -385,24 +1013,63 @@ function registerIpc(): void {
 	});
 }
 
-function run(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
+function run(
+	command: string,
+	args: string[],
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
 	return new Promise((resolve, reject) => {
-		execFile(command, args, { timeout: 15_000, env }, (error) => (error ? reject(error) : resolve()));
+		execFile(command, args, { timeout: 15_000, env }, (error) =>
+			error ? reject(error) : resolve(),
+		);
 	});
 }
 
-/** Prefer a code editor CLI found on the user's PATH; fall back to the default app. */
+/**
+ * macOS editor app bundles, tried when no editor CLI is on PATH -- installing an editor
+ * does not install its `code`/`cursor` shim, so this is a common state rather than an
+ * edge case. Named rather than probed by path, so LaunchServices finds them wherever
+ * they live. TextEdit is last and always present, which stops a file from ever reaching
+ * the OS default handler: whatever claimed `.json` is rarely an editor, and on a Mac
+ * with After Effects installed it is After Effects.
+ */
+const MAC_EDITOR_APPS = [
+	"Cursor",
+	"Visual Studio Code",
+	"Zed",
+	"Sublime Text",
+	"TextEdit",
+];
+
+/** Prefer a code editor CLI found on the user's PATH; fall back to an editor app. */
 async function openInEditor(path: string, line?: number): Promise<void> {
 	const env = await resolveShellEnv();
 	for (const cli of ["cursor", "code", "zed"]) {
 		try {
-			const target = line && cli !== "zed" ? ["-g", `${path}:${line}`] : [line ? `${path}:${line}` : path];
+			const target =
+				line && cli !== "zed"
+					? ["-g", `${path}:${line}`]
+					: [line ? `${path}:${line}` : path];
 			await run(cli, target, env);
 			return;
 		} catch {
 			// Not installed; try the next editor.
 		}
 	}
+
+	// Directories belong in Finder, so let the default handler take those. `open -a`
+	// cannot jump to a line, so callers passing one lose that here.
+	if (process.platform === "darwin" && !(await isDirectory(path))) {
+		for (const appName of MAC_EDITOR_APPS) {
+			try {
+				await run("open", ["-a", appName, path], env);
+				return;
+			} catch {
+				// Not installed; try the next editor.
+			}
+		}
+	}
+
 	const error = await shell.openPath(path);
 	if (error) throw new Error(error);
 }
@@ -412,21 +1079,11 @@ app.on("window-all-closed", () => {
 });
 
 let quitting = false;
-app.on("before-quit", (event) => {
-	if (quitting || !host) return;
-	event.preventDefault();
+app.on("before-quit", () => {
+	if (quitting) return;
 	quitting = true;
-	log.info("Quit requested; stopping pi processes");
+	log.info("Quit requested; leaving the session supervisor running");
 	if (mainWindow && !mainWindow.isDestroyed()) saveBounds(mainWindow);
 	sessions?.stop();
 	auth?.cancelLogin();
-	void host
-		.dispose()
-		.catch((error) => log.error("Error stopping pi processes", error))
-		.finally(() => {
-			log.info("pi processes stopped; quitting");
-			// Cleanup is done. Re-entering app.quit() is unreliable (it is dropped while a
-			// window is still loading), so finish with an explicit exit.
-			app.exit(0);
-		});
 });

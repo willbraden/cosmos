@@ -4,6 +4,14 @@ A desktop app for the [pi coding agent](https://github.com/earendil-works/pi), w
 
 ## Features
 
+- **Workspace dashboard**: the new-session screen lists your core company repos and experiments. Missing repos get a one-click **Clone** (`git@github.com:<org>/<repo>.git`, org configurable in Settings) with live git progress, or **Link existing…** to symlink a checkout you already have elsewhere on disk into the workspace root. Linked entries are badged and can be unlinked without touching the original folder. Repos registered as a Glayvin team layer are badged with that team's name.
+- **Team-curated repo lists**: a Glayvin team can narrow the suggested repos to the ones its members actually work in, by committing a `cosmos-repos.json` to the root of its team layer:
+
+  ```json
+  { "org": "shipt", "repos": ["cosmos-ai", "design-system"] }
+  ```
+
+  Entries may also be objects (`{ "name": "neutron", "org": "other-org" }`) when a repo lives outside the team's org. Lists from multiple registered teams are combined. Anything not listed still shows up under experiments once it is on disk, and members with no such file keep the built-in list.
 - **Sessions sidebar**: every pi session on disk, grouped by project, with pinning, full-text search (⌘K), rename, export to HTML, and move to Trash. It updates live as sessions change, including ones created by the pi CLI.
 - **Concurrent sessions**: each session runs its own pi process. Background sessions keep working, show a spinner, and notify you when they finish or need input. The dock badge counts sessions waiting for you.
 - **Streaming transcript**: markdown with syntax highlighting and copy buttons, collapsible thinking, and per-tool cards (bash, read, edit/write with diffs, grep/find/ls). Retries and compaction appear inline.
@@ -11,9 +19,11 @@ A desktop app for the [pi coding agent](https://github.com/earendil-works/pi), w
 - **Composer**: `/` command autocomplete (pi prompt templates, skills, extension commands, and desktop commands), `@` fuzzy file mentions (respects `.gitignore`), and image paste, drag-and-drop, or attach. `!cmd` runs a shell command; `!!cmd` keeps its output out of the model's context.
 - **While pi works**: Enter steers and ⌥Enter queues a follow-up (swappable in Settings). Queued messages are shown and editable. Esc stops, and anything queued returns to the composer.
 - **Model and thinking pickers**, a context-window meter, and session cost.
-- **Edit & fork**: edit any earlier message to branch a new session from it, or fork the whole session.
+- **Edit & fork**: edit any earlier message inline — the conversation rewinds to that point and your revised message is re-sent in the same session (the old branch stays in the session file). `/fork` branches the whole session into a new one.
 - **Changes panel** (⌘⇧D): every file pi changed in the session, with diffs and "open in editor".
 - **Native sign-in** for every pi provider: subscription OAuth (Claude, ChatGPT/Codex, Copilot, …) and API keys, using pi's own login flows. Credentials go to pi's `auth.json`, so the CLI and the app share them.
+- **MCP visibility and local overrides**: Settings → *MCPs* shows the active Glayvin MCP servers, whether OAuth-backed servers have local tokens, and lets you add/edit/remove personal MCP entries in your local Glayvin override file.
+- **Cosmos-managed profile by default**: the app uses its own Pi home by default, so GUI sessions keep a separate session/auth store from terminal work. If Glayvin is installed, Cosmos still passes through its shared home automatically so MCP config, prompts, skills, and company context remain available. You can still point Cosmos at an existing Pi or Glayvin home when you want to fully share sessions, auth, prompts, skills, and agents.
 - **Mac niceties**: login-shell PATH resolution (Homebrew and nvm tools work in bash), open project in Finder/editor/Terminal, remembered window size, light/dark/system theme, and system notifications.
 
 ## How it works
@@ -26,10 +36,43 @@ Renderer (React)  ⇄  IPC (validated)  ⇄  Main process
                                           └─ AuthService  → pi's ModelRuntime.login()
 ```
 
-- The app icon is `build/icon.svg`; after editing it run `npx electron scripts/render-icon.cjs` to regenerate `build/icon.png`.
+- The app icon lives in `build/icon.icon`, an [Icon Composer](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer) bundle: `icon.json` holds the background fill and layer placement, `Assets/` the glyph layers. Run `npm run build:icon` to regenerate `build/icon.icns`, `build/Assets.car` and the development Dock icon `build/icon.png`, all laid out by `actool` on Apple's icon grid. The glyph is painted white and carries its tone in the alpha channel, so it composites to the intended greys over the black fill while still reading correctly in the tinted and clear appearance modes. Note that `translucency` must include a `value` even when `enabled` is `false`, or `actool` fails with a bare "Icon export exited with status 255".
 - Pi is bundled as an npm dependency and runs on Electron's embedded Node, so users don't need Node installed. You can point Settings → *Custom pi CLI* at your own build instead.
+- By default, Cosmos seeds a separate managed Pi profile from any existing login and model defaults it can find, without copying the terminal session store or terminal-specific permission rules. If a Glayvin home is already available, Cosmos also passes it through automatically so shared MCP config and company context still load in GUI sessions. Settings → *pi configuration folder* is the advanced escape hatch when you explicitly want to reuse an existing Pi or Glayvin home. If that folder is a Glayvin-style `.../.pi/agent`, Cosmos also infers `GLAYVIN_HOME` automatically.
 - `resources/pi-extension/desktop-bridge.ts` is a small pi extension. It implements permission modes over pi's extension-UI protocol and does nothing outside the desktop app.
 - Idle background sessions give up their process after a configurable time and restart transparently when you return.
+
+## Installation
+
+### Clone and run locally
+
+```bash
+git clone git@github.com:wbraden/cosmos-gui.git
+cd cosmos-gui
+npm install
+npm run dev
+```
+
+### Recommended prerequisites
+
+- Node.js 20+
+- npm
+- macOS (required for the Electron desktop app and Mac packaging flow)
+
+### Validate before shipping changes
+
+```bash
+npm run typecheck
+npm test             # unit + end-to-end tests (real pi against a scripted fake model)
+```
+
+### Build a production app
+
+```bash
+npm run dist         # dist/Cosmos-<version>-arm64.dmg
+```
+
+After building, open the generated DMG from `dist/` and drag **Cosmos** into your Applications folder.
 
 ## Develop
 

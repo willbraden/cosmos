@@ -1,4 +1,9 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent, webUtils } from "electron";
+import {
+	contextBridge,
+	ipcRenderer,
+	type IpcRendererEvent,
+	webUtils,
+} from "electron";
 import type { DesktopApi } from "../shared/ipc";
 
 function subscribe<T>(channel: string) {
@@ -13,20 +18,52 @@ const api: DesktopApi = {
 	getAppInfo: () => ipcRenderer.invoke("app:info"),
 	getSettings: () => ipcRenderer.invoke("settings:get"),
 	updateSettings: (patch) => ipcRenderer.invoke("settings:update", patch),
+	getWorkspaceHealth: () => ipcRenderer.invoke("workspace:health"),
+	cloneWorkspaceRepo: (name) => ipcRenderer.invoke("workspace:clone-repo", name),
+	linkWorkspaceRepo: (name) => ipcRenderer.invoke("workspace:link-repo", name),
+	linkExistingProject: () => ipcRenderer.invoke("workspace:link-existing"),
+	unlinkWorkspaceRepo: (name) =>
+		ipcRenderer.invoke("workspace:unlink-repo", name),
+	getMcpOverview: () => ipcRenderer.invoke("mcp:overview"),
+	getGlayvinProfileOverview: () => ipcRenderer.invoke("glayvin:profile-overview"),
+	getFigmaXcodeAuthStatus: () => ipcRenderer.invoke("figma:xcode-status"),
+	launchFigmaXcodePluginInstall: () =>
+		ipcRenderer.invoke("figma:xcode-plugin-install"),
+	importXcodeFigmaAuth: () => ipcRenderer.invoke("figma:xcode-import-auth"),
+	resetFigmaAuth: () => ipcRenderer.invoke("figma:reset-auth"),
+	upsertPersonalMcpServer: (name, config) =>
+		ipcRenderer.invoke("mcp:upsert-personal", name, config),
+	removePersonalMcpServer: (name) =>
+		ipcRenderer.invoke("mcp:remove-personal", name),
+	getTeamDiscovery: (options) => ipcRenderer.invoke("teams:discover", options),
+	joinTeam: (repo) => ipcRenderer.invoke("teams:join", repo),
+	setTeamEnabled: (name, enabled) =>
+		ipcRenderer.invoke("teams:set-enabled", name, enabled),
+
 
 	listSessions: () => ipcRenderer.invoke("sessions:list"),
 	searchSessions: (query) => ipcRenderer.invoke("sessions:search", query),
 	deleteSession: (path) => ipcRenderer.invoke("sessions:delete", path),
-	sessionContextMenu: (path, pinned) => ipcRenderer.invoke("sessions:context-menu", path, pinned),
+	sessionContextMenu: (path, pinned) =>
+		ipcRenderer.invoke("sessions:context-menu", path, pinned),
 
 	openSession: (request) => ipcRenderer.invoke("session:open", request),
-	sendCommand: (tabId, command) => ipcRenderer.invoke("session:command", tabId, command),
-	respondToUi: (tabId, response) => ipcRenderer.invoke("session:ui-response", tabId, response),
+	getLiveSessions: () => ipcRenderer.invoke("session:live-state"),
+	sendCommand: (tabId, command) =>
+		ipcRenderer.invoke("session:command", tabId, command),
+	respondToUi: (tabId, response) =>
+		ipcRenderer.invoke("session:ui-response", tabId, response),
 	closeSession: (tabId) => ipcRenderer.invoke("session:close", tabId),
 	setVisibleSession: (tabId) => ipcRenderer.send("session:visible", tabId),
 
 	pickFolder: () => ipcRenderer.invoke("dialog:pick-folder"),
+	createExperiment: (name) =>
+		ipcRenderer.invoke("workspace:create-experiment", name),
 	searchFiles: (cwd, query) => ipcRenderer.invoke("files:search", cwd, query),
+	getWorktreeSupport: (cwd) => ipcRenderer.invoke("worktrees:support", cwd),
+	previewManagedWorktree: (cwd, taskGroupId, workerId) =>
+		ipcRenderer.invoke("worktrees:preview", cwd, taskGroupId, workerId),
+	listFiles: (cwd, dir) => ipcRenderer.invoke("files:list", cwd, dir),
 	getPathForFile: (file) => {
 		try {
 			return webUtils.getPathForFile(file);
@@ -36,15 +73,19 @@ const api: DesktopApi = {
 	},
 	openPath: (path) => ipcRenderer.invoke("shell:open-path", path),
 	revealPath: (path) => ipcRenderer.invoke("shell:reveal", path),
-	openInEditor: (path, line) => ipcRenderer.invoke("shell:open-in-editor", path, line),
+	openInEditor: (path, line) =>
+		ipcRenderer.invoke("shell:open-in-editor", path, line),
 	openTerminal: (cwd) => ipcRenderer.invoke("shell:open-terminal", cwd),
 	openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
 	copyText: (text) => ipcRenderer.invoke("clipboard:write", text),
-	showSaveDialog: (defaultName) => ipcRenderer.invoke("dialog:save", defaultName),
+	showSaveDialog: (defaultName) =>
+		ipcRenderer.invoke("dialog:save", defaultName),
 
 	listProviders: () => ipcRenderer.invoke("auth:providers"),
-	login: (providerId, method) => ipcRenderer.invoke("auth:login", providerId, method),
-	answerAuthPrompt: (promptId, value) => ipcRenderer.send("auth:answer", promptId, value),
+	login: (providerId, method) =>
+		ipcRenderer.invoke("auth:login", providerId, method),
+	answerAuthPrompt: (promptId, value) =>
+		ipcRenderer.send("auth:answer", promptId, value),
 	cancelLogin: () => ipcRenderer.send("auth:cancel"),
 	logout: (providerId) => ipcRenderer.invoke("auth:logout", providerId),
 
@@ -55,6 +96,7 @@ const api: DesktopApi = {
 	onSessionEvents: subscribe("session:events"),
 	onSessionExit: subscribe("session:exit"),
 	onSessionsChanged: subscribe("sessions:changed"),
+	onWorkspaceProgress: subscribe("workspace:progress"),
 	onAuthEvent: subscribe("auth:event"),
 	onAuthPrompt: subscribe("auth:prompt"),
 	onAuthChanged: subscribe("auth:changed"),

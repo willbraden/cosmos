@@ -6,7 +6,10 @@ export default defineConfig({
 	main: {
 		build: {
 			rollupOptions: {
-				input: { index: resolve("src/main/index.ts") },
+				input: {
+					index: resolve("src/main/index.ts"),
+					"session-supervisor": resolve("src/main/session-supervisor.ts"),
+				},
 			},
 		},
 	},

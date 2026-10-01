@@ -5,6 +5,7 @@ import { api, errorMessage } from "../lib/api";
 import { refreshProviders } from "../state/actions";
 import { toast } from "../state/store";
 import { CopyButton } from "./Markdown";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 /**
  * Drives pi's provider sign-in (OAuth or API key). The main process runs pi's own login
@@ -173,7 +174,7 @@ export function LoginDialog({ provider, method, onClose }: { provider: ProviderI
 
 					{!prompt && !done && !authUrl && !device && !latest && (
 						<div className="working">
-							<span className="spinner" /> Starting sign-in…
+							<SpinnerIcon size={14} /> Starting sign-in…
 						</div>
 					)}
 

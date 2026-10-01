@@ -2,13 +2,14 @@ import { FileDiff, FolderOpen, GitFork, RotateCw, SquareTerminal, TriangleAlert 
 import { useMemo, useRef, useState } from "react";
 import { api, basename, formatCost, formatTokens, tildify } from "../lib/api";
 import { cloneSession, renameSession, retryTab } from "../state/actions";
-import { collectFileChanges } from "../state/chat-model";
+import { collectFileChanges, firstUserMessage } from "../state/chat-model";
 import { sessionTitle, type TabState, useStore } from "../state/store";
 import { Composer } from "./Composer";
-import { CosmosMark } from "./CosmosMark";
 import { DialogCard } from "./DialogCard";
+import { FigmaChatAssist } from "./FigmaChatAssist";
 import { useDismiss } from "./Pickers";
 import { Transcript } from "./Transcript";
+import { SpinnerIcon } from "./SpinnerIcon";
 
 function ContextMeter({ tab }: { tab: TabState }) {
 	const usage = tab.stats?.contextUsage;
@@ -82,7 +83,7 @@ function Title({ tab }: { tab: TabState }) {
 	const summary = useStore((s) => s.sessions.find((x) => x.path === tab.sessionPath));
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
-	const title = sessionTitle(tab.name ? { name: tab.name } : summary, "New session");
+	const title = sessionTitle(tab.name ? { name: tab.name } : summary, "New session", firstUserMessage(tab.chat), tab.autoTitle);
 	if (editing) {
 		return (
 			<input
@@ -150,27 +151,52 @@ export function ChatHeader({ tab, scrolled }: { tab: TabState; scrolled: boolean
 	);
 }
 
+const WELCOME_PHRASES = [
+	"Begin your exploration.",
+	"What shall we discover?",
+	"Every thought has a universe.",
+	"One thought can go anywhere.",
+	"Wonder where it leads.",
+];
+
+let lastWelcomePhrase = -1;
+
+function nextWelcomePhrase() {
+	let index = Math.floor(Math.random() * WELCOME_PHRASES.length);
+	if (index === lastWelcomePhrase) index = (index + 1) % WELCOME_PHRASES.length;
+	lastWelcomePhrase = index;
+	return WELCOME_PHRASES[index];
+}
+
 function Welcome({ tab }: { tab: TabState }) {
 	const providers = useStore((s) => s.providers);
 	const models = useStore((s) => s.models);
-	const home = useStore((s) => s.appInfo?.homeDir);
-	const noProvider = tab.status === "ready" && models.length === 0 && !providers.some((p) => p.configured);
+	const phrase = useMemo(() => nextWelcomePhrase(), [tab.tabId]);
+	const noProvider =
+		tab.status === "ready" &&
+		models.length === 0 &&
+		!providers.some((p) => p.configured);
 	return (
-		<div className="empty">
-			<div className="app-logo">
-				<CosmosMark size={38} />
-			</div>
-			<h1>What should we build in {basename(tab.cwd)}?</h1>
-			<div className="muted small-text">{tildify(tab.cwd, home)}</div>
+		<div className="empty-chat-welcome minimal">
+			<h1>{phrase}</h1>
 			{noProvider && (
-				<div className="welcome-card">
-					<TriangleAlert size={18} style={{ color: "var(--warning)", flexShrink: 0, marginTop: 2 }} />
+				<div className="welcome-card compact">
+					<TriangleAlert
+						size={18}
+						style={{ color: "var(--warning)", flexShrink: 0, marginTop: 2 }}
+					/>
 					<div>
-						<div style={{ fontWeight: 600, marginBottom: 2 }}>Connect a model provider</div>
-						<div className="small-text muted" style={{ marginBottom: 10 }}>
-							Sign in with a subscription (Claude, ChatGPT, Copilot…) or add an API key. Credentials are stored in pi's own auth file, shared with the pi CLI.
+						<div style={{ fontWeight: 600, marginBottom: 2 }}>
+							Connect a model provider
 						</div>
-						<button type="button" className="btn primary small" onClick={() => useStore.setState({ settingsPane: "providers" })}>
+						<div className="small-text muted" style={{ marginBottom: 10 }}>
+							Sign in with a subscription or add an API key to start chatting.
+						</div>
+						<button
+							type="button"
+							className="btn primary small"
+							onClick={() => useStore.setState({ settingsPane: "providers" })}
+						>
 							Connect a provider
 						</button>
 					</div>
@@ -202,16 +228,23 @@ export function ChatView({ tab }: { tab: TabState }) {
 		);
 	}
 
+	const showCenteredComposer =
+		tab.status !== "starting" && tab.chat.items.length === 0 && !tab.isStreaming;
+
 	return (
 		<div className="main">
 			<ChatHeader tab={tab} scrolled={scrolled} />
-			<div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
+			<div className={showCenteredComposer ? "chat-stage chat-stage-empty" : "chat-stage"}>
+				<FigmaChatAssist tab={tab} />
 				{tab.status === "starting" && tab.chat.items.length === 0 ? (
 					<div className="empty">
-						<span className="spinner" style={{ width: 20, height: 20 }} />
+						<SpinnerIcon size={64} />
 					</div>
-				) : tab.chat.items.length === 0 && !tab.isStreaming ? (
-					<Welcome tab={tab} />
+				) : showCenteredComposer ? (
+					<div className="empty-chat-shell">
+						<Welcome tab={tab} />
+						<Composer tab={tab} centered />
+					</div>
 				) : (
 					<Transcript tab={tab} onScrolled={setScrolled} />
 				)}
@@ -221,7 +254,7 @@ export function ChatView({ tab }: { tab: TabState }) {
 					<DialogCard key={dialog.id} tabId={tab.tabId} dialog={dialog} />
 				</div>
 			)}
-			<Composer tab={tab} />
+			{!showCenteredComposer && <Composer tab={tab} />}
 		</div>
 	);
 }

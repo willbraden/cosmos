@@ -2,38 +2,161 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { app } from "electron";
 import log from "electron-log/main";
-import { DEFAULT_SETTINGS, type DesktopSettings, type PermissionMode, type ThemePreference } from "../shared/ipc";
+import {
+	DEFAULT_SETTINGS,
+	DEFAULT_THEME_SEEDS,
+	type DesktopSettings,
+	type ModelRef,
+	type PermissionMode,
+	SIDEBAR_MAX_WIDTH,
+	SIDEBAR_MIN_WIDTH,
+	type ThemePreference,
+	type ThemeSeeds,
+	type ThemeSeedSet,
+} from "../shared/ipc";
+import { isValidOrgName } from "./workspace";
 
 const THEMES: ThemePreference[] = ["system", "light", "dark"];
 const MODES: PermissionMode[] = ["ask", "acceptEdits", "auto"];
 const MAX_RECENT_PROJECTS = 12;
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Seeds reach us straight from the renderer's colour inputs, so every channel
+ * is checked. A malformed entry falls back to the default for that mode rather
+ * than failing the whole patch — a bad hex should not cost the user their
+ * other settings.
+ */
+function sanitizeSeeds(value: unknown, fallback: ThemeSeeds): ThemeSeeds {
+	if (!value || typeof value !== "object") return fallback;
+	const raw = value as Record<string, unknown>;
+	const pick = (key: keyof ThemeSeeds): string => {
+		const v = raw[key];
+		return typeof v === "string" && HEX.test(v) ? v.toLowerCase() : fallback[key];
+	};
+	return { bg: pick("bg"), fg: pick("fg"), accent: pick("accent") };
+}
+
+function sanitizeSeedSet(value: unknown): ThemeSeedSet | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const raw = value as Record<string, unknown>;
+	return {
+		light: sanitizeSeeds(raw.light, DEFAULT_THEME_SEEDS.light),
+		dark: sanitizeSeeds(raw.dark, DEFAULT_THEME_SEEDS.dark),
+	};
+}
 
 function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isSessionOrderMap(value: unknown): value is Record<string, string[]> {
+	return (
+		!!value &&
+		typeof value === "object" &&
+		Object.entries(value).every(
+			([cwd, order]) => isAbsolute(cwd) && isStringArray(order),
+		)
+	);
+}
+
+function isModelRef(value: unknown): value is ModelRef {
+	if (!value || typeof value !== "object") return false;
+	const raw = value as Record<string, unknown>;
+	return typeof raw.provider === "string" && typeof raw.id === "string";
 }
 
 /**
  * Validate an untrusted settings patch (from disk or the renderer) field by field.
  * Unknown keys and wrongly typed values are dropped rather than trusted.
  */
-export function sanitizeSettingsPatch(input: unknown): Partial<DesktopSettings> {
+export function sanitizeSettingsPatch(
+	input: unknown,
+): Partial<DesktopSettings> {
 	if (!input || typeof input !== "object") return {};
 	const raw = input as Record<string, unknown>;
 	const out: Partial<DesktopSettings> = {};
-	if (THEMES.includes(raw.theme as ThemePreference)) out.theme = raw.theme as ThemePreference;
-	if (MODES.includes(raw.permissionMode as PermissionMode)) out.permissionMode = raw.permissionMode as PermissionMode;
-	if (typeof raw.notifications === "boolean") out.notifications = raw.notifications;
-	if (typeof raw.sidebarCollapsed === "boolean") out.sidebarCollapsed = raw.sidebarCollapsed;
-	if (raw.busySendMode === "steer" || raw.busySendMode === "followUp") out.busySendMode = raw.busySendMode;
-	if (typeof raw.idleSuspendMinutes === "number" && Number.isFinite(raw.idleSuspendMinutes)) {
-		out.idleSuspendMinutes = Math.min(24 * 60, Math.max(0, Math.round(raw.idleSuspendMinutes)));
+	if (THEMES.includes(raw.theme as ThemePreference))
+		out.theme = raw.theme as ThemePreference;
+	if (MODES.includes(raw.permissionMode as PermissionMode))
+		out.permissionMode = raw.permissionMode as PermissionMode;
+	if (raw.defaultModel === null) out.defaultModel = null;
+	else if (isModelRef(raw.defaultModel))
+		out.defaultModel = { provider: raw.defaultModel.provider, id: raw.defaultModel.id };
+	if (typeof raw.notifications === "boolean")
+		out.notifications = raw.notifications;
+	if (typeof raw.sidebarCollapsed === "boolean")
+		out.sidebarCollapsed = raw.sidebarCollapsed;
+	if (
+		typeof raw.sidebarWidth === "number" &&
+		Number.isFinite(raw.sidebarWidth)
+	) {
+		out.sidebarWidth = Math.min(
+			SIDEBAR_MAX_WIDTH,
+			Math.max(SIDEBAR_MIN_WIDTH, Math.round(raw.sidebarWidth)),
+		);
 	}
-	if (typeof raw.piCliPath === "string" && (raw.piCliPath === "" || isAbsolute(raw.piCliPath))) {
+	if (typeof raw.developerMode === "boolean")
+		out.developerMode = raw.developerMode;
+	if (typeof raw.figmaChatContextGate === "boolean")
+		out.figmaChatContextGate = raw.figmaChatContextGate;
+	if (typeof raw.homeConstellations === "boolean")
+		out.homeConstellations = raw.homeConstellations;
+	const seeds = sanitizeSeedSet(raw.themeSeeds);
+	if (seeds) out.themeSeeds = seeds;
+	if (raw.busySendMode === "steer" || raw.busySendMode === "followUp")
+		out.busySendMode = raw.busySendMode;
+	if (
+		typeof raw.idleSuspendMinutes === "number" &&
+		Number.isFinite(raw.idleSuspendMinutes)
+	) {
+		out.idleSuspendMinutes = Math.min(
+			24 * 60,
+			Math.max(0, Math.round(raw.idleSuspendMinutes)),
+		);
+	}
+	if (
+		typeof raw.piCliPath === "string" &&
+		(raw.piCliPath === "" || isAbsolute(raw.piCliPath))
+	) {
 		out.piCliPath = raw.piCliPath;
 	}
-	if (isStringArray(raw.pinnedSessions)) out.pinnedSessions = [...new Set(raw.pinnedSessions.filter(isAbsolute))];
+	if (
+		typeof raw.agentDirPath === "string" &&
+		(raw.agentDirPath === "" || isAbsolute(raw.agentDirPath))
+	) {
+		out.agentDirPath = raw.agentDirPath;
+	}
+	if (
+		typeof raw.glayvinHomePath === "string" &&
+		(raw.glayvinHomePath === "" || isAbsolute(raw.glayvinHomePath))
+	) {
+		out.glayvinHomePath = raw.glayvinHomePath;
+	}
+	if (
+		typeof raw.workspaceRootPath === "string" &&
+		(raw.workspaceRootPath === "" || isAbsolute(raw.workspaceRootPath))
+	) {
+		out.workspaceRootPath = raw.workspaceRootPath;
+	}
+	if (typeof raw.coreRepoOrg === "string") {
+		const org = raw.coreRepoOrg.trim();
+		if (org === "" || isValidOrgName(org)) out.coreRepoOrg = org;
+	}
+	if (isStringArray(raw.pinnedSessions))
+		out.pinnedSessions = [...new Set(raw.pinnedSessions.filter(isAbsolute))];
+	if (isSessionOrderMap(raw.sidebarSessionOrder)) {
+		out.sidebarSessionOrder = Object.fromEntries(
+			Object.entries(raw.sidebarSessionOrder).map(([cwd, order]) => [
+				cwd,
+				[...new Set(order)],
+			]),
+		);
+	}
 	if (isStringArray(raw.recentProjects)) {
-		out.recentProjects = [...new Set(raw.recentProjects.filter(isAbsolute))].slice(0, MAX_RECENT_PROJECTS);
+		out.recentProjects = [
+			...new Set(raw.recentProjects.filter(isAbsolute)),
+		].slice(0, MAX_RECENT_PROJECTS);
 	}
 	return out;
 }
@@ -42,7 +165,9 @@ export class SettingsStore {
 	private settings: DesktopSettings;
 	private readonly listeners = new Set<(settings: DesktopSettings) => void>();
 
-	constructor(private readonly file = join(app.getPath("userData"), "settings.json")) {
+	constructor(
+		private readonly file = join(app.getPath("userData"), "settings.json"),
+	) {
 		this.settings = { ...DEFAULT_SETTINGS, ...this.readFromDisk() };
 	}
 
@@ -58,7 +183,10 @@ export class SettingsStore {
 	}
 
 	addRecentProject(cwd: string): void {
-		const recent = [cwd, ...this.settings.recentProjects.filter((p) => p !== cwd)];
+		const recent = [
+			cwd,
+			...this.settings.recentProjects.filter((p) => p !== cwd),
+		];
 		this.update({ recentProjects: recent });
 	}
 
@@ -71,7 +199,8 @@ export class SettingsStore {
 		try {
 			return sanitizeSettingsPatch(JSON.parse(readFileSync(this.file, "utf8")));
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") log.warn("Ignoring unreadable settings file", error);
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+				log.warn("Ignoring unreadable settings file", error);
 			return {};
 		}
 	}
