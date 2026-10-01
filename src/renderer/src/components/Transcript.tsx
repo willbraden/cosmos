@@ -1,6 +1,7 @@
 import {
 	ArrowDown,
 	Brain,
+	ChevronDown,
 	ChevronRight,
 	CircleAlert,
 	History,
@@ -80,149 +81,6 @@ function hasActiveReasoningWork(
 	return waiting || running;
 }
 
-function ReasoningFold({
-	blocks,
-	tools,
-	cwd,
-	settled,
-	waitingToolIds,
-	live,
-	runStartedAt,
-	showActiveStatus = true,
-}: {
-	blocks: ReasoningBlock[];
-	tools: ChatState["tools"];
-	cwd: string;
-	settled: boolean;
-	waitingToolIds: Set<string>;
-	live: boolean;
-	runStartedAt?: number;
-	showActiveStatus?: boolean;
-}) {
-	const [open, setOpen] = useState(false);
-	const [, force] = useState(0);
-	useEffect(() => {
-		if (!live) return;
-		const timer = setInterval(() => force((n) => n + 1), 1000);
-		return () => clearInterval(timer);
-	}, [live]);
-	const label = summarizeReasoning(blocks, tools, waitingToolIds, settled);
-	const steps = reasoningStepCount(blocks);
-	const waiting = blocks.some(
-		(block) => block.type === "toolCall" && waitingToolIds.has(block.id),
-	);
-	const running = blocks.some(
-		(block) =>
-			block.type === "toolCall" &&
-			!waitingToolIds.has(block.id) &&
-			!settled &&
-			(!tools[block.id] || tools[block.id]?.status === "running"),
-	);
-	const active =
-		showActiveStatus &&
-		live &&
-		hasActiveReasoningWork(blocks, tools, waitingToolIds, settled);
-	const seconds =
-		active && runStartedAt ? Math.floor((Date.now() - runStartedAt) / 1000) : 0;
-	return (
-		<div className="fold reasoning-fold">
-			<button
-				type="button"
-				className={`fold-header${active ? " active-thread" : ""}`}
-				onClick={() => setOpen(!open)}
-				aria-expanded={open}
-			>
-				<span className="fold-header-main">
-					<ChevronRight size={14} className={`chev${open ? " open" : ""}`} />
-					<Brain size={14} />
-					<span className="label">{label}</span>
-					<span className="tail">
-						{waiting && !active ? (
-							<span style={{ color: "var(--warning)" }}>Needs approval</span>
-						) : null}
-						{running && !active ? <SpinnerIcon size={14} /> : null}
-						{steps > 1 ? <span>{steps} steps</span> : null}
-					</span>
-				</span>
-				{active && (
-					<span className="fold-header-sub">
-						{waiting ? (
-							<span style={{ color: "var(--warning)" }}>Needs approval</span>
-						) : (
-							<>
-								<SpinnerIcon size={14} />
-								<span>Working{seconds > 2 ? ` · ${seconds}s` : ""}</span>
-							</>
-						)}
-					</span>
-				)}
-			</button>
-			{open && (
-				<div className="reasoning-body">
-					{blocks.map((block, index) => {
-						if (block.type === "thinking") {
-							return (
-								<ReasoningNote
-									key={`thinking:${index}`}
-									text={block.text}
-									redacted={block.redacted}
-								/>
-							);
-						}
-						return (
-							<ToolCard
-								key={block.id || index}
-								block={block}
-								run={tools[block.id]}
-								cwd={cwd}
-								settled={settled}
-								awaitingPermission={waitingToolIds.has(block.id)}
-							/>
-						);
-					})}
-				</div>
-			)}
-		</div>
-	);
-}
-
-function groupDetailBlocks(
-	blocks: Block[],
-): Array<
-	| { key: string; kind: "text"; text: string }
-	| { key: string; kind: "detail"; blocks: ReasoningBlock[]; live: boolean }
-> {
-	const groups: Array<
-		| { key: string; kind: "text"; text: string }
-		| { key: string; kind: "detail"; blocks: ReasoningBlock[]; live: boolean }
-	> = [];
-	let detailStart = -1;
-	let detailBlocks: ReasoningBlock[] = [];
-	const flushDetails = (lastIndex: number) => {
-		if (detailBlocks.length === 0) return;
-		groups.push({
-			key: `detail:${detailStart}`,
-			kind: "detail",
-			blocks: detailBlocks,
-			live: lastIndex === blocks.length - 1,
-		});
-		detailStart = -1;
-		detailBlocks = [];
-	};
-	blocks.forEach((block, index) => {
-		if (block.type === "text") {
-			flushDetails(index - 1);
-			if (block.text.trim())
-				groups.push({ key: `text:${index}`, kind: "text", text: block.text });
-			return;
-		}
-		if (detailStart === -1) detailStart = index;
-		detailBlocks = [...detailBlocks, block];
-	});
-	flushDetails(blocks.length - 1);
-	return groups;
-}
-
 const UserMessage = memo(function UserMessage({
 	item,
 	tabId,
@@ -295,31 +153,39 @@ function AssistantStepDetails({
 	tools,
 	cwd,
 	waitingToolIds,
-	runStartedAt,
 }: {
 	item: AssistantTranscriptItem;
 	tools: ChatState["tools"];
 	cwd: string;
 	waitingToolIds: Set<string>;
-	runStartedAt?: number;
 }) {
-	const groups = useMemo(() => groupDetailBlocks(item.blocks), [item.blocks]);
 	return (
 		<>
-			{groups.map((group) => {
-				if (group.kind === "text")
-					return <Markdown key={group.key} text={group.text} />;
+			{item.blocks.map((block, index) => {
+				if (block.type === "text") {
+					return block.text.trim() ? (
+						// biome-ignore lint/suspicious/noArrayIndexKey: blocks are positional
+						<Markdown key={`text:${index}`} text={block.text} />
+					) : null;
+				}
+				if (block.type === "thinking") {
+					return (
+						<ReasoningNote
+							// biome-ignore lint/suspicious/noArrayIndexKey: blocks are positional
+							key={`thinking:${index}`}
+							text={block.text}
+							redacted={block.redacted}
+						/>
+					);
+				}
 				return (
-					<ReasoningFold
-						key={group.key}
-						blocks={group.blocks}
-						tools={tools}
+					<ToolCard
+						key={block.id || index}
+						block={block}
+						run={tools[block.id]}
 						cwd={cwd}
 						settled={!item.streaming}
-						waitingToolIds={waitingToolIds}
-						live={item.streaming && group.live}
-						runStartedAt={runStartedAt}
-						showActiveStatus={false}
+						awaitingPermission={waitingToolIds.has(block.id)}
 					/>
 				);
 			})}
@@ -355,7 +221,7 @@ const AssistantTurn = memo(function AssistantTurn({
 	const latestDetailBlocks = latestDetailItem
 		? assistantDetailBlocks(latestDetailItem)
 		: [];
-	const detailLabel = latestDetailItem
+	const liveLabel = latestDetailItem
 		? summarizeReasoning(
 				latestDetailBlocks,
 				tools,
@@ -374,6 +240,8 @@ const AssistantTurn = memo(function AssistantTurn({
 		turnActive &&
 		!!latestDetailItem &&
 		hasActiveReasoningWork(latestDetailBlocks, tools, waitingToolIds, false);
+	// Idle turns collapse to a plain "Thought"; the live summary only shows while working.
+	const detailLabel = liveLabel ? (active || waiting ? liveLabel : "Thought") : null;
 	const [open, setOpen] = useState(false);
 	const [, force] = useState(0);
 	useEffect(() => {
@@ -394,11 +262,14 @@ const AssistantTurn = memo(function AssistantTurn({
 						onClick={() => setOpen(!open)}
 						aria-expanded={open}
 					>
-						<ChevronRight
-							size={14}
-							className={`chev${open ? " open" : ""}`}
-						/>
-						{active && !waiting ? <SpinnerIcon size={16} /> : <Brain size={14} />}
+						<span className="fold-icon">
+							{active && !waiting ? (
+								<SpinnerIcon size={16} className="fold-icon-rest" />
+							) : (
+								<Brain size={16} className="fold-icon-rest" />
+							)}
+							<ChevronDown size={16} className="fold-icon-chevron" />
+						</span>
 						<span className="label">{detailLabel}</span>
 						<span className="tail">
 							{waiting ? (
@@ -418,7 +289,6 @@ const AssistantTurn = memo(function AssistantTurn({
 										tools={tools}
 										cwd={cwd}
 										waitingToolIds={waitingToolIds}
-										runStartedAt={runStartedAt}
 									/>
 								</div>
 							))}
