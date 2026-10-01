@@ -1025,7 +1025,23 @@ function run(
 	});
 }
 
-/** Prefer a code editor CLI found on the user's PATH; fall back to the default app. */
+/**
+ * macOS editor app bundles, tried when no editor CLI is on PATH -- installing an editor
+ * does not install its `code`/`cursor` shim, so this is a common state rather than an
+ * edge case. Named rather than probed by path, so LaunchServices finds them wherever
+ * they live. TextEdit is last and always present, which stops a file from ever reaching
+ * the OS default handler: whatever claimed `.json` is rarely an editor, and on a Mac
+ * with After Effects installed it is After Effects.
+ */
+const MAC_EDITOR_APPS = [
+	"Cursor",
+	"Visual Studio Code",
+	"Zed",
+	"Sublime Text",
+	"TextEdit",
+];
+
+/** Prefer a code editor CLI found on the user's PATH; fall back to an editor app. */
 async function openInEditor(path: string, line?: number): Promise<void> {
 	const env = await resolveShellEnv();
 	for (const cli of ["cursor", "code", "zed"]) {
@@ -1040,6 +1056,20 @@ async function openInEditor(path: string, line?: number): Promise<void> {
 			// Not installed; try the next editor.
 		}
 	}
+
+	// Directories belong in Finder, so let the default handler take those. `open -a`
+	// cannot jump to a line, so callers passing one lose that here.
+	if (process.platform === "darwin" && !(await isDirectory(path))) {
+		for (const appName of MAC_EDITOR_APPS) {
+			try {
+				await run("open", ["-a", appName, path], env);
+				return;
+			} catch {
+				// Not installed; try the next editor.
+			}
+		}
+	}
+
 	const error = await shell.openPath(path);
 	if (error) throw new Error(error);
 }
