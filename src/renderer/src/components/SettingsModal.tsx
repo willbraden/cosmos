@@ -13,6 +13,7 @@ import type {
 	ProviderInfo,
 	TeamDiscovery,
 	TeamMembership,
+	ThemeSeeds,
 } from "@shared/ipc";
 import {
 	CircleCheck,
@@ -33,7 +34,9 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { DEFAULT_THEME_SEEDS } from "@shared/ipc";
 import { api, errorMessage, tildify } from "../lib/api";
+import { contrastRatio } from "../lib/theme-colors";
 import {
 	applyPermissionModeToAllOpenSessions,
 	refreshProviders,
@@ -83,6 +86,29 @@ function Setting({
 			</div>
 			{children}
 		</div>
+	);
+}
+
+const SEED_LABELS: Record<"bg" | "fg" | "accent", string> = {
+	bg: "Background",
+	fg: "Text",
+	accent: "Accent",
+};
+
+/**
+ * Live contrast readout. The derivation can't rescue a background and text
+ * colour the user picked to be close together, so say so rather than letting
+ * them discover it after closing the modal.
+ */
+function ContrastNote({ seeds }: { seeds: ThemeSeeds }) {
+	const text = contrastRatio(seeds.fg, seeds.bg);
+	const accent = contrastRatio(seeds.accent, seeds.bg);
+	const grade = (r: number) => (r >= 7 ? "AAA" : r >= 4.5 ? "AA" : r >= 3 ? "AA large" : "fails");
+	const weakest = Math.min(text, accent);
+	return (
+		<span className={`theme-seed-contrast${weakest < 4.5 ? " warn" : ""}`}>
+			Text {text.toFixed(1)}:1 {grade(text)} · Accent {accent.toFixed(1)}:1 {grade(accent)}
+		</span>
 	);
 }
 
@@ -265,6 +291,76 @@ function General({
 							onClick={() => update({ theme })}
 						>
 							{theme[0].toUpperCase() + theme.slice(1)}
+						</button>
+					))}
+				</div>
+			</Setting>
+			<Setting
+				name="Theme colours"
+				help="Background, text, and accent for each mode. Panels, borders, and muted text are derived from these. Status colours (error, warning, success) stay as they are so they remain legible."
+				stacked
+			>
+				<div className="theme-seed-editor">
+					{(["light", "dark"] as const).map((mode) => (
+						<div className="theme-seed-mode" key={mode}>
+							<div className="theme-seed-head">
+								<span className="name">{mode === "light" ? "Light" : "Dark"}</span>
+								<button
+									type="button"
+									className="btn small"
+									onClick={() =>
+										update({
+											themeSeeds: {
+												...settings.themeSeeds,
+												[mode]: DEFAULT_THEME_SEEDS[mode],
+											},
+										})
+									}
+								>
+									Reset
+								</button>
+							</div>
+							{(["bg", "fg", "accent"] as const).map((key) => (
+								<label className="theme-seed-row" key={key}>
+									<span>{SEED_LABELS[key]}</span>
+									<span className="theme-seed-value">
+										{settings.themeSeeds[mode][key]}
+									</span>
+									<input
+										type="color"
+										value={settings.themeSeeds[mode][key]}
+										onChange={(e) =>
+											update({
+												themeSeeds: {
+													...settings.themeSeeds,
+													[mode]: {
+														...settings.themeSeeds[mode],
+														[key]: e.target.value,
+													},
+												},
+											})
+										}
+									/>
+								</label>
+							))}
+							<ContrastNote seeds={settings.themeSeeds[mode]} />
+						</div>
+					))}
+				</div>
+			</Setting>
+			<Setting
+				name="Home star field"
+				help="Drifting constellations behind the home page. Never shown inside a session."
+			>
+				<div className="segmented">
+					{([true, false] as const).map((on) => (
+						<button
+							key={String(on)}
+							type="button"
+							className={settings.homeConstellations === on ? "on" : ""}
+							onClick={() => update({ homeConstellations: on })}
+						>
+							{on ? "On" : "Off"}
 						</button>
 					))}
 				</div>

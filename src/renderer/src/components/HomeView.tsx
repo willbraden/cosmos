@@ -27,6 +27,7 @@ import {
 import { api, basename, errorMessage, tildify } from "../lib/api";
 import { startNewSession, startSessionWithPrompt } from "../state/actions";
 import { toast, useStore } from "../state/store";
+import { ConstellationField } from "./ConstellationField";
 import { Dropdown, PERMISSION_MODES } from "./Pickers";
 import { SpinnerIcon } from "./SpinnerIcon";
 
@@ -677,9 +678,11 @@ export function HomeView() {
 	};
 
 	const readyCount = coreRepos.filter((repo) => repo.exists && repo.isGitRepo).length;
+	const constellations = useStore((s) => s.settings.homeConstellations);
 
 	return (
-		<div className="main">
+		<div className="main home-main">
+			{constellations ? <ConstellationField /> : null}
 			<div className="main-header drag" style={{ paddingLeft: 16 }} />
 			<div className="home">
 				<div className="home-inner">

@@ -3,7 +3,9 @@ import type {
 	PermissionMode,
 	SessionEventBatch,
 	SessionExit,
+	ThemeSeedSet,
 } from "@shared/ipc";
+import { DEFAULT_THEME_SEEDS } from "@shared/ipc";
 import {
 	type ImageContent,
 	type Model,
@@ -18,6 +20,7 @@ import {
 	type ThinkingLevel,
 } from "@shared/pi-types";
 import { api, basename, errorMessage } from "../lib/api";
+import { applyThemeSeeds } from "../lib/theme-colors";
 import {
 	applyRecord,
 	type ChatState,
@@ -97,7 +100,7 @@ export async function bootstrap(): Promise<void> {
 		api.getSettings(),
 	]);
 	useStore.setState({ appInfo, settings });
-	applyTheme(settings.theme);
+	applyTheme(settings.theme, settings.themeSeeds);
 
 	api.onSessionEvents(handleEventBatch);
 	api.onSessionExit(handleExit);
@@ -109,7 +112,7 @@ export async function bootstrap(): Promise<void> {
 			next.permissionMode,
 		);
 		useStore.setState({ settings: next });
-		applyTheme(next.theme);
+		applyTheme(next.theme, next.themeSeeds);
 		if (needsPermissionSync) {
 			void applyPermissionModeToAllOpenSessions(next.permissionMode);
 		}
@@ -185,9 +188,15 @@ async function restoreLiveSessions(live: LiveSessionState): Promise<boolean> {
 	return true;
 }
 
-export function applyTheme(theme: "system" | "light" | "dark"): void {
+export function applyTheme(
+	theme: "system" | "light" | "dark",
+	seeds: ThemeSeedSet = DEFAULT_THEME_SEEDS,
+): void {
 	if (theme === "system") delete document.documentElement.dataset.theme;
 	else document.documentElement.dataset.theme = theme;
+	// Seeds go through the same entry point as the light/dark preference so
+	// the two can never be applied out of step.
+	applyThemeSeeds(seeds);
 }
 
 /**

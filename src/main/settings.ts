@@ -4,18 +4,47 @@ import { app } from "electron";
 import log from "electron-log/main";
 import {
 	DEFAULT_SETTINGS,
+	DEFAULT_THEME_SEEDS,
 	type DesktopSettings,
 	type ModelRef,
 	type PermissionMode,
 	SIDEBAR_MAX_WIDTH,
 	SIDEBAR_MIN_WIDTH,
 	type ThemePreference,
+	type ThemeSeeds,
+	type ThemeSeedSet,
 } from "../shared/ipc";
 import { isValidOrgName } from "./workspace";
 
 const THEMES: ThemePreference[] = ["system", "light", "dark"];
 const MODES: PermissionMode[] = ["ask", "acceptEdits", "auto"];
 const MAX_RECENT_PROJECTS = 12;
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Seeds reach us straight from the renderer's colour inputs, so every channel
+ * is checked. A malformed entry falls back to the default for that mode rather
+ * than failing the whole patch — a bad hex should not cost the user their
+ * other settings.
+ */
+function sanitizeSeeds(value: unknown, fallback: ThemeSeeds): ThemeSeeds {
+	if (!value || typeof value !== "object") return fallback;
+	const raw = value as Record<string, unknown>;
+	const pick = (key: keyof ThemeSeeds): string => {
+		const v = raw[key];
+		return typeof v === "string" && HEX.test(v) ? v.toLowerCase() : fallback[key];
+	};
+	return { bg: pick("bg"), fg: pick("fg"), accent: pick("accent") };
+}
+
+function sanitizeSeedSet(value: unknown): ThemeSeedSet | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const raw = value as Record<string, unknown>;
+	return {
+		light: sanitizeSeeds(raw.light, DEFAULT_THEME_SEEDS.light),
+		dark: sanitizeSeeds(raw.dark, DEFAULT_THEME_SEEDS.dark),
+	};
+}
 
 function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -71,6 +100,10 @@ export function sanitizeSettingsPatch(
 		out.developerMode = raw.developerMode;
 	if (typeof raw.figmaChatContextGate === "boolean")
 		out.figmaChatContextGate = raw.figmaChatContextGate;
+	if (typeof raw.homeConstellations === "boolean")
+		out.homeConstellations = raw.homeConstellations;
+	const seeds = sanitizeSeedSet(raw.themeSeeds);
+	if (seeds) out.themeSeeds = seeds;
 	if (raw.busySendMode === "steer" || raw.busySendMode === "followUp")
 		out.busySendMode = raw.busySendMode;
 	if (
