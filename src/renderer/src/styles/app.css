@@ -3435,6 +3435,7 @@ select {
 	border-radius: var(--border-radius-8);
 	background: var(--color-surface-primary);
 	overflow: hidden;
+	flex-shrink: 0;
 }
 
 .change-file-header {
@@ -3446,6 +3447,12 @@ select {
 	font-size: 12px;
 	border-bottom: 1px solid var(--color-border-neutral-subtle);
 	background: var(--color-surface-secondary);
+	min-height: 32px;
+	flex-shrink: 0;
+}
+
+.change-file:not(.open) .change-file-header {
+	border-bottom: none;
 }
 
 .change-file-header .path {
