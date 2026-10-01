@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type {
 	DiscoveredTeam,
@@ -10,6 +10,7 @@ import type {
 } from "../shared/ipc";
 import {
 	type GlayvinTeam,
+	isDirectory,
 	readDisabledTeamNames,
 	readRegisteredTeamNames,
 } from "./glayvin-runtime";
@@ -362,7 +363,7 @@ export interface MembershipContext {
 	disabled: readonly string[];
 	/** Every registered name, including those with relative paths. */
 	registered: readonly string[];
-	/** Injected so tests don't need real directories. */
+	/** Injected so tests don't need real directories. Defaults to a directory check. */
 	exists?: (path: string) => boolean;
 }
 
@@ -375,7 +376,7 @@ export function effectivePrecedence(
 	teams: readonly GlayvinTeam[],
 	context: MembershipContext,
 ): Map<string, number> {
-	const exists = context.exists ?? existsSync;
+	const exists = context.exists ?? isDirectory;
 	const ranks = new Map<string, number>();
 	let rank = 0;
 	for (const team of teams) {
@@ -398,7 +399,7 @@ export function resolveMembership(
 	context: MembershipContext,
 	precedence?: ReadonlyMap<string, number>,
 ): TeamMembership | undefined {
-	const exists = context.exists ?? existsSync;
+	const exists = context.exists ?? isDirectory;
 	const entry =
 		teams.find((team) => team.name === repo) ??
 		teams.find((team) => team.path === localPath);
@@ -449,7 +450,7 @@ function decorate(
 	const precedence = effectivePrecedence(teams, membershipContext);
 	return candidates.map((candidate) => {
 		const localPath = join(workspaceRootPath, candidate.repo);
-		const cloned = existsSync(localPath);
+		const cloned = isDirectory(localPath);
 		return {
 			...candidate,
 			org,

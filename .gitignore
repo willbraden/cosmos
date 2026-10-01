@@ -10,3 +10,7 @@ build/Assets.car
 build/*.app/
 build/*.icns
 portfolio documentation/
+
+# Output from the CDP verification harnesses.
+glayvin-pane-output/
+ui-smoke-output/
