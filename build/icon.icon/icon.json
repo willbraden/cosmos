@@ -3,8 +3,8 @@
     {
       "value" : {
         "linear-gradient" : [
-          "display-p3:0.11262,0.11262,0.11262,1.00000",
-          "display-p3:0.00000,0.00000,0.00000,1.00000"
+          "display-p3:0.06617,0.09313,0.18902,1.00000",
+          "display-p3:0.20320,0.31014,0.69624,1.00000"
         ]
       }
     },
@@ -12,8 +12,8 @@
       "appearance" : "dark",
       "value" : {
         "linear-gradient" : [
-          "display-p3:0.13719,0.13719,0.13719,1.00000",
-          "display-p3:0.00000,0.00000,0.00000,1.00000"
+          "display-p3:0.04835,0.06760,0.13843,1.00000",
+          "display-p3:0.15274,0.23140,0.52236,1.00000"
         ]
       }
     }
@@ -22,47 +22,8 @@
     {
       "layers" : [
         {
-          "image-name" : "4.png",
-          "name" : "4"
-        },
-        {
-          "image-name" : "3.png",
-          "name" : "3",
-          "opacity-specializations" : [
-            {
-              "value" : 0.5
-            },
-            {
-              "appearance" : "dark",
-              "value" : 0.5
-            }
-          ]
-        },
-        {
-          "image-name" : "2.png",
-          "name" : "2",
-          "opacity-specializations" : [
-            {
-              "value" : 0.5
-            },
-            {
-              "appearance" : "dark",
-              "value" : 0.5
-            }
-          ]
-        },
-        {
           "image-name" : "1.png",
-          "name" : "1",
-          "opacity-specializations" : [
-            {
-              "value" : 0.5
-            },
-            {
-              "appearance" : "dark",
-              "value" : 0.5
-            }
-          ]
+          "name" : "Moon"
         }
       ],
       "shadow" : {
