@@ -2162,7 +2162,7 @@ select {
 	align-items: center;
 	justify-content: space-between;
 	gap: 16px;
-	padding: 18px 26px;
+	padding: 9px 26px;
 	background: var(--color-surface-default);
 	border-bottom: 1px solid var(--color-border-neutral-subtle);
 }
