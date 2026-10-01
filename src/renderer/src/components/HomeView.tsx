@@ -27,9 +27,10 @@ import {
 import { api, basename, errorMessage, tildify } from "../lib/api";
 import { startNewSession, startSessionWithPrompt } from "../state/actions";
 import { toast, useStore } from "../state/store";
-import { CosmosMark } from "./CosmosMark";
 import { Dropdown, PERMISSION_MODES } from "./Pickers";
 import { SpinnerIcon } from "./SpinnerIcon";
+
+const SHOW_SUGGESTIONS = false;
 
 const SUGGESTIONS = [
 	{
@@ -304,8 +305,15 @@ function RepoTile({
 				<div className="repo-card-copy">
 					<div className="repo-card-title-row">
 						<div className="repo-card-title">{repo.name}</div>
-						<span className={`repo-card-kind repo-card-kind-${kind}`}>
-							{kind === "core" ? "Core repo" : "Experiment"}
+						<span
+							className={`repo-card-kind repo-card-kind-${repo.team ? "team" : kind}`}
+							title={
+								repo.team
+									? `Registered as the "${repo.team}" Glayvin team layer`
+									: undefined
+							}
+						>
+							{repo.team ?? (kind === "core" ? "Core repo" : "Experiment")}
 						</span>
 						{repo.isSymlink && (
 							<span className="repo-card-kind repo-card-kind-linked">
@@ -467,6 +475,8 @@ export function HomeView() {
 	const recent = useStore((s) => s.settings.recentProjects);
 	const home = useStore((s) => s.appInfo?.homeDir);
 	const workspaceRoot = useStore((s) => s.appInfo?.workspaceRoot);
+	// Joining a team can publish a new cosmos-repos.json, which changes these suggestions.
+	const workspaceRevision = useStore((s) => s.workspaceRevision);
 	const [health, setHealth] = useState<WorkspaceHealth | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [newExperimentOpen, setNewExperimentOpen] = useState(false);
@@ -501,7 +511,7 @@ export function HomeView() {
 		return () => {
 			cancelled = true;
 		};
-	}, [workspaceRoot]);
+	}, [workspaceRoot, workspaceRevision]);
 
 	// Grow the prompt box with its content up to the CSS max-height.
 	useLayoutEffect(() => {
@@ -674,7 +684,7 @@ export function HomeView() {
 			<div className="home">
 				<div className="home-inner">
 					<div className="home-hero">
-						<CosmosMark size={44} />
+						<span className="home-hero-wordmark">cosmos</span>
 					</div>
 
 					<div className="home-composer-card">
@@ -717,22 +727,24 @@ export function HomeView() {
 						</div>
 					</div>
 
-					<div className="home-suggestions">
-						{SUGGESTIONS.map(({ prompt: text, label, icon: Icon }) => (
-							<button
-								key={label}
-								type="button"
-								className="home-suggestion"
-								disabled={!cwd || starting}
-								onClick={() => void send(text)}
-							>
-								<span className="home-suggestion-text">{text}</span>
-								<span className="home-suggestion-tag">
-									<Icon size={13} /> {label}
-								</span>
-							</button>
-						))}
-					</div>
+					{SHOW_SUGGESTIONS && (
+						<div className="home-suggestions">
+							{SUGGESTIONS.map(({ prompt: text, label, icon: Icon }) => (
+								<button
+									key={label}
+									type="button"
+									className="home-suggestion"
+									disabled={!cwd || starting}
+									onClick={() => void send(text)}
+								>
+									<span className="home-suggestion-text">{text}</span>
+									<span className="home-suggestion-tag">
+										<Icon size={13} /> {label}
+									</span>
+								</button>
+							))}
+						</div>
+					)}
 
 					<section className="home-section">
 						<div className="home-section-head">

@@ -1,6 +1,7 @@
 import type {
 	AppInfo,
 	DesktopSettings,
+	DiscoveredTeam,
 	FigmaXcodeAuthStatus,
 	GlayvinPackageSummary,
 	GlayvinPackLayer,
@@ -10,6 +11,8 @@ import type {
 	McpConfigOverview,
 	McpServerDefinition,
 	ProviderInfo,
+	TeamDiscovery,
+	TeamMembership,
 } from "@shared/ipc";
 import {
 	CircleCheck,
@@ -26,6 +29,7 @@ import {
 	Server,
 	SlidersHorizontal,
 	Trash2,
+	Users,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -1846,9 +1850,449 @@ function About() {
 	);
 }
 
+function relativeTime(timestamp: number | undefined): string {
+	if (!timestamp) return "never";
+	const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+	if (seconds < 60) return "just now";
+	const units: [number, string][] = [
+		[60, "minute"],
+		[60, "hour"],
+		[24, "day"],
+	];
+	let value = seconds;
+	let label = "second";
+	for (const [size, name] of units) {
+		if (value < size) break;
+		value = Math.floor(value / size);
+		label = name;
+	}
+	return `${value} ${label}${value === 1 ? "" : "s"} ago`;
+}
+
+/** Why a registered team isn't applying, and the command that fixes it. */
+function MembershipNote({ membership }: { membership: TeamMembership }) {
+	if (membership.state === "active") {
+		return (
+			<div className="small-text muted selectable">
+				{membership.path}
+				{membership.elsewhere && " · outside your workspace"}
+			</div>
+		);
+	}
+	const explanation =
+		membership.state === "disabled"
+			? "Registered but switched off, so none of its config is being applied."
+			: membership.state === "missing"
+				? `Registered at ${membership.path}, which no longer exists. Glayvin skips it.`
+				: "Registered with a relative path, which Glayvin only resolves from the directory it runs in. The CLI always writes absolute paths, so this was hand-edited — re-add it to fix it.";
+	const fix =
+		membership.state === "disabled"
+			? `glayvin manage teams enable ${membership.name}`
+			: `glayvin manage teams remove ${membership.name}`;
+	return (
+		<div className="small-text muted">
+			{explanation}
+			<div className="selectable">{fix}</div>
+		</div>
+	);
+}
+
+function TeamCard({
+	team,
+	canJoin,
+	busy,
+	progress,
+	onJoin,
+	onToggle,
+}: {
+	team: DiscoveredTeam;
+	canJoin: boolean;
+	busy: boolean;
+	progress: string;
+	onJoin: () => void;
+	onToggle: (enabled: boolean) => void;
+}) {
+	const membership = team.membership;
+	const state = membership?.state;
+	const layers = team.markers.filter((marker) => marker.kind === "layer");
+	// Only worth showing on a repo we are unsure about, where they are the evidence against.
+	const products = team.markers.filter((marker) => marker.kind === "product");
+	const showProducts = team.classification === "uncertain";
+	return (
+		<div className="mcp-card">
+			<div className="mcp-card-header">
+				<div className="info">
+					<div className="mcp-title-row">
+						<strong>{team.repo}</strong>
+						<div className="mcp-badges">
+							{state === "active" && (
+								<span className="badge">
+									<CircleCheck size={11} /> Joined
+								</span>
+							)}
+							{membership?.precedence !== undefined && (
+								<span
+									className="mcp-badge neutral"
+									title="Where this team sits in Glayvin's resolution order. Higher wins."
+								>
+									#{membership.precedence}
+								</span>
+							)}
+							{state === "disabled" && (
+								<span className="mcp-badge warning">Disabled</span>
+							)}
+							{state === "missing" && (
+								<span className="mcp-badge danger">Folder missing</span>
+							)}
+							{state === "unresolved" && (
+								<span className="mcp-badge danger">Relative path</span>
+							)}
+							{!membership && team.clonedPath && (
+								<span className="mcp-badge neutral">Already cloned</span>
+							)}
+							{team.curatesRepos && (
+								<span className="mcp-badge neutral">Suggests repos</span>
+							)}
+						</div>
+					</div>
+					{team.description && <div className="source">{team.description}</div>}
+					<div className="small-text muted selectable">
+						{layers.map((marker) => marker.name).join(" · ") ||
+							"No team-layer files found at the repo root"}
+						{showProducts && products.length > 0 && (
+							<> · looks like a service ({products.slice(0, 3).map((m) => m.name).join(", ")})</>
+						)}
+					</div>
+					{membership && <MembershipNote membership={membership} />}
+					{busy && progress && (
+						<div className="small-text muted">{progress}</div>
+					)}
+				</div>
+				<div className="mcp-actions">
+					<button
+						type="button"
+						className="btn small"
+						onClick={() => void api.openExternal(team.htmlUrl)}
+					>
+						<ExternalLink size={13} /> GitHub
+					</button>
+					{state === "active" || state === "disabled" ? (
+						<>
+							{state === "active" && (
+								<button
+									type="button"
+									className="btn small"
+									onClick={() => void api.revealPath(membership?.path ?? "")}
+								>
+									<FolderOpen size={13} /> Reveal
+								</button>
+							)}
+							<button
+								type="button"
+								className="btn small"
+								disabled={!canJoin || busy}
+								onClick={() => onToggle(state === "disabled")}
+								title={
+									canJoin ? undefined : "The glayvin command is not on your PATH"
+								}
+							>
+								{busy ? (
+									<>
+										<SpinnerIcon size={13} /> Working…
+									</>
+								) : state === "disabled" ? (
+									"Enable"
+								) : (
+									"Disable"
+								)}
+							</button>
+						</>
+					) : membership ? null : (
+						team.classification !== "template" && (
+							<button
+								type="button"
+								className="btn small primary"
+								disabled={!canJoin || busy}
+								onClick={onJoin}
+								title={
+									canJoin ? undefined : "The glayvin command is not on your PATH"
+								}
+							>
+								{busy ? (
+									<>
+										<SpinnerIcon size={13} /> Joining…
+									</>
+								) : team.clonedPath ? (
+									"Register"
+								) : (
+									"Join"
+								)}
+							</button>
+						)
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function Teams() {
+	const info = useStore((s) => s.appInfo);
+	const [discovery, setDiscovery] = useState<TeamDiscovery | null>(null);
+	const [loading, setLoading] = useState(true);
+	const [joining, setJoining] = useState<string | null>(null);
+	const [progress, setProgress] = useState("");
+
+	const load = useCallback(async (refresh: boolean) => {
+		setLoading(true);
+		try {
+			setDiscovery(await api.getTeamDiscovery({ refresh }));
+		} catch (error) {
+			toast("error", errorMessage(error));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		void load(false);
+	}, [load]);
+
+	useEffect(
+		() =>
+			api.onWorkspaceProgress(({ name, message }) => {
+				if (name === joining) setProgress(message);
+			}),
+		[joining],
+	);
+
+	const join = async (repo: string) => {
+		setJoining(repo);
+		setProgress("");
+		try {
+			const next = await api.joinTeam(repo);
+			setDiscovery(next);
+			const rank = next.teams.find((team) => team.repo === repo)?.membership
+				?.precedence;
+			toast(
+				"info",
+				rank && rank > 1
+					? `Joined ${repo}. It now takes precedence over your other ${rank - 1} team${rank > 2 ? "s" : ""}.`
+					: `Joined ${repo}.`,
+			);
+			// The new layer may publish a repo list, so let Home pick it up.
+			useStore.setState((s) => ({ workspaceRevision: s.workspaceRevision + 1 }));
+		} catch (error) {
+			toast("error", errorMessage(error));
+		} finally {
+			setJoining(null);
+			setProgress("");
+		}
+	};
+
+	const setEnabled = async (team: DiscoveredTeam, enabled: boolean) => {
+		const name = team.membership?.name;
+		if (!name) return;
+		setJoining(name);
+		try {
+			setDiscovery(await api.setTeamEnabled(name, enabled));
+			toast("info", `${enabled ? "Enabled" : "Disabled"} ${name}.`);
+			useStore.setState((s) => ({ workspaceRevision: s.workspaceRevision + 1 }));
+		} catch (error) {
+			toast("error", errorMessage(error));
+		} finally {
+			setJoining(null);
+		}
+	};
+
+	const all = discovery?.teams ?? [];
+	// Only an active team is actually being applied, so nothing else belongs beside it.
+	const joined = all
+		.filter((team) => team.membership?.state === "active")
+		.sort(
+			(a, b) =>
+				(a.membership?.precedence ?? 0) - (b.membership?.precedence ?? 0),
+		);
+	const needsAttention = all.filter(
+		(team) => team.membership && team.membership.state !== "active",
+	);
+	const available = all.filter(
+		(team) => !team.membership && team.classification === "team",
+	);
+	const uncertain = all.filter(
+		(team) => !team.membership && team.classification === "uncertain",
+	);
+	const template = all.find(
+		(team) => team.classification === "template" && !team.membership,
+	);
+
+	const cardProps = (team: DiscoveredTeam) => ({
+		team,
+		canJoin: discovery?.canJoin ?? false,
+		busy: joining === team.repo || joining === team.membership?.name,
+		progress,
+		onJoin: () => void join(team.repo),
+		onToggle: (enabled: boolean) => void setEnabled(team, enabled),
+	});
+
+	return (
+		<>
+			<h3>Teams</h3>
+			<div className="muted small-text">
+				A team is a shared layer of Glayvin config — packs, profiles, skills and MCP
+				servers. Joining one clones it into your workspace, registers it with Glayvin,
+				and can change which repos Cosmos suggests on the home screen.
+			</div>
+			<div className="mcp-toolbar">
+				<button
+					type="button"
+					className="btn small"
+					disabled={loading}
+					onClick={() => void load(true)}
+				>
+					<RefreshCw size={12} /> Refresh
+				</button>
+			</div>
+
+			{loading && (
+				<div className="working">
+					<SpinnerIcon size={14} /> Looking for teams…
+				</div>
+			)}
+
+			{!loading && discovery && (
+				<>
+					<div className="mcp-meta">
+						<div>
+							<strong>Organization:</strong>{" "}
+							<span className="muted selectable">{discovery.org}</span>
+						</div>
+						<div>
+							<strong>Workspace:</strong>{" "}
+							<span className="muted selectable">
+								{tildify(discovery.workspaceRootPath, info?.homeDir)}
+							</span>
+						</div>
+						<div>
+							<strong>Last checked:</strong>{" "}
+							<span className="muted">{relativeTime(discovery.fetchedAt)}</span>
+						</div>
+						{discovery.survey && (
+							<div>
+								<strong>Searched for:</strong>{" "}
+								<span className="muted">
+									{discovery.survey.markers.join(", ")} — matched{" "}
+									{discovery.survey.matched}, confirmed {discovery.survey.teams}
+								</span>
+							</div>
+						)}
+					</div>
+
+					{discovery.notes.map((note) => (
+						<div key={note} className="notice info" style={{ marginTop: 10 }}>
+							{note}
+						</div>
+					))}
+
+					{joined.length > 0 && (
+						<>
+							<h4 style={{ marginTop: 18 }}>Your teams</h4>
+							<div className="muted small-text" style={{ marginBottom: 8 }}>
+								Listed in the order Glayvin applies them. Where two teams define the
+								same pack or profile, the one further down wins — and if it does not
+								declare an override, Glayvin reports a conflict instead of guessing.
+							</div>
+							<div className="mcp-list">
+								{joined.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</>
+					)}
+
+					{needsAttention.length > 0 && (
+						<>
+							<h4 style={{ marginTop: 18 }}>Needs attention</h4>
+							<div className="muted small-text" style={{ marginBottom: 8 }}>
+								Registered with Glayvin but not being applied.
+							</div>
+							<div className="mcp-list">
+								{needsAttention.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</>
+					)}
+
+					{available.length > 0 && (
+						<>
+							<h4 style={{ marginTop: 18 }}>Available in {discovery.org}</h4>
+							<div className="muted small-text" style={{ marginBottom: 8 }}>
+								You already have read access to every repo listed here — that access is
+								the only thing a team membership has ever been.
+							</div>
+							<div className="mcp-list">
+								{available.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</>
+					)}
+
+					{uncertain.length > 0 && (
+						<details className="mcp-tools" style={{ marginTop: 18 }}>
+							<summary>Not sure about these ({uncertain.length})</summary>
+							<div className="muted small-text" style={{ margin: "8px 0" }}>
+								These carry one file a team layer would have, but otherwise look like
+								ordinary services. Cosmos is guessing, so they are listed rather than
+								hidden — join one anyway if you know better.
+							</div>
+							<div className="mcp-list">
+								{uncertain.map((team) => (
+									<TeamCard key={team.repo} {...cardProps(team)} />
+								))}
+							</div>
+						</details>
+					)}
+
+					{discovery.available && available.length === 0 && uncertain.length === 0 && (
+						<div className="notice info" style={{ marginTop: 18 }}>
+							<div>
+								{joined.length > 0
+									? `Nothing further to join in ${discovery.org}.`
+									: `Nothing to join in ${discovery.org} yet.`}{" "}
+								{discovery.survey
+									? `Cosmos looked for ${discovery.survey.markers.join(", ")} at the root of every repo you can read, and matched ${discovery.survey.matched}.`
+									: "Refresh to search again."}{" "}
+								A team layer kept outside {discovery.org} still works — clone it and
+								run `glayvin manage teams add &lt;name&gt; &lt;path&gt;`.
+							</div>
+						</div>
+					)}
+
+					{template && (
+						<div className="notice info" style={{ marginTop: 18 }}>
+							<strong>{template.repo}</strong> is the starting point for making a new
+							team, not one to join.{" "}
+							<button
+								type="button"
+								className="btn small"
+								onClick={() => void api.openExternal(template.htmlUrl)}
+							>
+								Open on GitHub
+							</button>
+						</div>
+					)}
+				</>
+			)}
+		</>
+	);
+}
+
 const PANES: { id: SettingsPane; label: string; icon: typeof Plug }[] = [
 	{ id: "general", label: "General", icon: SlidersHorizontal },
 	{ id: "providers", label: "Providers", icon: KeyRound },
+	{ id: "teams", label: "Teams", icon: Users },
 	{ id: "mcps", label: "MCPs", icon: Plug },
 	{ id: "glayvin", label: "Glayvin", icon: Layers },
 	{ id: "about", label: "About", icon: Info },
@@ -1905,6 +2349,7 @@ export function SettingsModal({ pane }: { pane: SettingsPane }) {
 					</div>
 					{pane === "general" && <General settings={settings} update={update} />}
 					{pane === "providers" && <Providers />}
+					{pane === "teams" && <Teams />}
 					{pane === "mcps" && <Mcps />}
 					{pane === "glayvin" && <Glayvin />}
 					{pane === "about" && <About />}
