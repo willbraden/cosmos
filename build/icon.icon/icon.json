@@ -1,68 +1,38 @@
 {
-  "fill-specializations" : [
-    {
-      "value" : {
-        "linear-gradient" : [
-          "display-p3:0.11262,0.11262,0.11262,1.00000",
-          "display-p3:0.00000,0.00000,0.00000,1.00000"
-        ]
-      }
-    },
-    {
-      "appearance" : "dark",
-      "value" : {
-        "linear-gradient" : [
-          "display-p3:0.13719,0.13719,0.13719,1.00000",
-          "display-p3:0.00000,0.00000,0.00000,1.00000"
-        ]
-      }
-    }
-  ],
+  "fill" : {
+    "automatic-gradient" : "display-p3:0.00000,0.03910,0.22775,1.00000"
+  },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "4.png",
-          "name" : "4"
+          "fill" : "none",
+          "glass" : true,
+          "image-name" : "Union01.png",
+          "name" : "Union01",
+          "opacity" : 0.75,
+          "position" : {
+            "scale" : 0.6300000000000001,
+            "translation-in-points" : [
+              0,
+              46
+            ]
+          }
         },
         {
-          "image-name" : "3.png",
-          "name" : "3",
-          "opacity-specializations" : [
-            {
-              "value" : 0.5
-            },
-            {
-              "appearance" : "dark",
-              "value" : 0.5
-            }
-          ]
-        },
-        {
-          "image-name" : "2.png",
-          "name" : "2",
-          "opacity-specializations" : [
-            {
-              "value" : 0.5
-            },
-            {
-              "appearance" : "dark",
-              "value" : 0.5
-            }
-          ]
-        },
-        {
-          "image-name" : "1.png",
-          "name" : "1",
-          "opacity-specializations" : [
-            {
-              "value" : 0.5
-            },
-            {
-              "appearance" : "dark",
-              "value" : 0.5
-            }
-          ]
+          "fill" : "none",
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "Union02.png",
+          "name" : "Union02",
+          "opacity" : 0.75,
+          "position" : {
+            "scale" : 0.6300000000000001,
+            "translation-in-points" : [
+              -50,
+              0
+            ]
+          }
         }
       ],
       "shadow" : {

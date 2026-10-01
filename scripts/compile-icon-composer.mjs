@@ -8,6 +8,7 @@ const root = resolve(new URL('..', import.meta.url).pathname)
 const sourceIcon = join(root, 'build/icon.icon')
 const outputIcns = join(root, 'build/icon.icns')
 const outputAssetsCar = join(root, 'build/Assets.car')
+const outputPng = join(root, 'build/icon.png')
 
 if (!existsSync(sourceIcon)) {
   console.error(`Missing Icon Composer bundle: ${sourceIcon}`)
@@ -67,6 +68,20 @@ try {
   if (existsSync(assetsCarPath)) {
     console.log(`Wrote ${outputAssetsCar}`)
   }
+
+  // The Dock icon used in development comes from a plain PNG, so derive it from
+  // the compiled icns. actool lays the artwork out on Apple's icon grid (an 824pt
+  // tile inside a 1024pt canvas, plus the system shadow); rendering the PNG
+  // separately would approximate that squircle with a border radius and come out
+  // visibly smaller than every other icon in the Dock.
+  // 512 is the largest representation actool emits here, so asking for more only
+  // upscales; the Dock never draws larger than this anyway.
+  const sips = spawnSync('sips', ['-s', 'format', 'png', '-Z', '512', outputIcns, '--out', outputPng], { encoding: 'utf8' })
+  if (sips.status !== 0) {
+    if (sips.stderr) process.stderr.write(sips.stderr)
+    process.exit(sips.status ?? 1)
+  }
+  console.log(`Wrote ${outputPng}`)
 } finally {
   rmSync(workDir, { recursive: true, force: true })
 }
